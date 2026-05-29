@@ -32,7 +32,7 @@ enum ScanState {
 /// the skeleton simple. Moving detection to an isolate is a known follow-up.
 class ScanController extends ChangeNotifier {
   ScanController({
-    required CardRepository repository,
+    required this._repository,
     required RecentsStore recents,
     OcrService? ocr,
     CardDetector? detector,
@@ -40,10 +40,9 @@ class ScanController extends ChangeNotifier {
     this.minCaptureScore = 0.55,
     this.runOcr = true,
     this.expandRetryFactor = 0.05,
-  })  : _repository = repository,
-        _recents = recents,
-        _ocr = ocr ?? OcrService(),
-        _detector = detector ?? CardDetector();
+  }) : _recents = recents,
+       _ocr = ocr ?? OcrService(),
+       _detector = detector ?? CardDetector();
 
   final CardRepository _repository;
   final RecentsStore _recents;
@@ -166,28 +165,43 @@ class ScanController extends ChangeNotifier {
       // matching can be debugged from logcat even when nothing matches.
       if (kDebugMode) {
         final hashes = detection.computeHashes();
-        final closest = await _repository
-            .diagnoseClosest(ScanHashes(art: hashes.art, full: hashes.full));
+        final closest = await _repository.diagnoseClosest(
+          ScanHashes(art: hashes.art, full: hashes.full),
+        );
         final summary = closest
             .map((m) => '${m.printId} ${m.arm}=${m.distance}')
             .join(', ');
-        debugPrint('[fabscan] source=${detection.source} '
-            'score=${detection.score.toStringAsFixed(2)} '
-            'ocr="${title ?? ''}" conf=${ocrConfidence?.toStringAsFixed(0) ?? '-'} '
-            'closest: $summary');
+        debugPrint(
+          '[fabscan] source=${detection.source} '
+          'score=${detection.score.toStringAsFixed(2)} '
+          'ocr="${title ?? ''}" conf=${ocrConfidence?.toStringAsFixed(0) ?? '-'} '
+          'closest: $summary',
+        );
       }
 
-      var match = await _recognize(detection,
-          title: title, ocrConfidence: ocrConfidence, ocr: ocr);
+      var match = await _recognize(
+        detection,
+        title: title,
+        ocrConfidence: ocrConfidence,
+        ocr: ocr,
+      );
 
       // A card sleeve or a tight contour can clip the card edge so nothing
       // matches; retry once with the capture region grown by [expandRetryFactor].
       if (match == null && expandRetryFactor > 0) {
         final expanded = _detector.expandCapture(
-            bgr, detection, _sensorOrientation, 1 + expandRetryFactor);
+          bgr,
+          detection,
+          _sensorOrientation,
+          1 + expandRetryFactor,
+        );
         if (expanded != null) {
-          match = await _recognize(expanded,
-              title: title, ocrConfidence: ocrConfidence, ocr: ocr);
+          match = await _recognize(
+            expanded,
+            title: title,
+            ocrConfidence: ocrConfidence,
+            ocr: ocr,
+          );
         }
       }
 
@@ -222,7 +236,10 @@ class ScanController extends ChangeNotifier {
       detectorScore: detection.score,
       detectSource: detection.source,
       capturedCardPng: _encodeRgbPng(
-          detection.cardRgb, detection.cardWidth, detection.cardHeight),
+        detection.cardRgb,
+        detection.cardWidth,
+        detection.cardHeight,
+      ),
       capturedArtPng: _encodeRgbPng(art.rgb, art.width, art.height),
       capturedTitleRawPng: ocr?.rawPng,
       capturedTitleOcrPng: ocr?.processedPng,
