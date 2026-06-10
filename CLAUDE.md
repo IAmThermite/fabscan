@@ -22,13 +22,32 @@ flutter test                          # all tests
 flutter test test/phash_test.dart     # a single test file
 flutter test --name "substring"       # a single test by name
 
-# Rebuild the bundled card DB (assets/cards.db). Default mode downloads ~9k card
-# images and recomputes hashes — slow, one-time. See the DB constraint below.
+# Rebuild the bundled card DB (assets/cards.db) from the flesh-and-blood-cards
+# submodule's precomputed hashes (no image download — fast). See the DB constraint below.
+git submodule update --init flesh-and-blood-cards   # one-time, if not cloned
 dart run tool/build_card_db.dart
 dart run tool/build_card_db.dart --limit 50     # quick test against 50 cards
 ```
 
 First Android build is slow: `opencv_dart` downloads the OpenCV SDK (~100 MB) via CMake.
+
+## Card data source (the `flesh-and-blood-cards` submodule)
+
+`assets/cards.db` is built from the **`flesh-and-blood-cards`** git submodule — the
+[IAmThermite fork](https://github.com/IAmThermite/flesh-and-blood-cards) tracked on its
+**`feature/card-art-hashes`** branch (pinned in [.gitmodules](.gitmodules)). That branch ships
+**precomputed** perceptual hashes for every printing in
+`flesh-and-blood-cards/json/english/card.json`: each card carries `name`/`pitch`/`unique_id`
+at the top level and a `printings[]` array, each printing carrying `phash_art` / `phash_full`
+(stringified 63-bit ints), `image_url`, `set_id`, `foiling`, `edition` and `art_variations`.
+[tool/build_card_db.dart](tool/build_card_db.dart) reads these straight into the DB — no image
+download, no recompute. **The phashes are only usable because the fork's
+`helper-scripts/calculate-phashes` pipeline is byte-for-byte equivalent to this app's Dart
+`PHash`** (same 32×32 area-average downsample, 0.299/0.587/0.114 luma, top-left 8×8 DCT block
+with the DC term excluded, and the regular art rect `0.10/0.16/0.80/0.42` ==
+`ArtBbox.defaultRegular`). If that pipeline ever diverges, live captures stop matching — re-verify
+before trusting a new branch/commit. The mainline (non-fork) branch has **no** phashes, so the
+submodule must stay on `feature/card-art-hashes`.
 
 ## Scan pipeline (the core data flow)
 
@@ -50,11 +69,11 @@ cross isolates trivially; moving it off-main is a known follow-up). Per frame:
 ## Invariants you must not break
 
 - **RGB everywhere into `PHash`.** `PHash.compute` ([phash.dart](lib/src/vision/phash.dart)) and the build tool both feed **RGB** pixels. Camera buffers are BGR — convert before hashing or matches silently fail.
-- **The bundled DB must be recomputed with this Dart pipeline.** `assets/cards.db` pHashes must come from `dart run tool/build_card_db.dart` (default download-and-recompute mode). `--reuse-phash` copies the reference project's precomputed hashes, which will **not** match live camera captures — use it only to populate names/images/variants while developing the UI.
-- **One art-crop tuning knob.** At scan time the app can't know a print's art type, so both the app and the build tool crop the art region with the fixed `ArtBbox.defaultRegular` ([fab_card.dart](lib/src/models/fab_card.dart) line 175). Change it in one place and you must rebuild the DB. Both sides crop via the **same pure-Dart** `ArtCrop.extract` ([art_crop.dart](lib/src/vision/art_crop.dart)) (deliberately free of Flutter/OpenCV imports so the CLI tool and app run identical crop + hash code) — keep it dependency-free or app/DB hashes will diverge.
+- **The bundled DB's pHashes must stay pipeline-compatible.** `assets/cards.db` pHashes come from the `flesh-and-blood-cards` submodule (see the section above) via `dart run tool/build_card_db.dart`. They only match live camera captures because the fork's hash pipeline mirrors this app's `PHash` — if you point the submodule at a different fork/branch, re-verify that equivalence first.
+- **One art-crop tuning knob.** At scan time the app can't know a print's art type, so the app crops the art region with the fixed `ArtBbox.defaultRegular` ([fab_card.dart](lib/src/models/fab_card.dart) line 175) via the pure-Dart `ArtCrop.extract` ([art_crop.dart](lib/src/vision/art_crop.dart)), and the submodule's hash pipeline crops the identical `REGULAR_ART_BBOX = (0.10, 0.16, 0.80, 0.42)`. Change the app side and the stored hashes no longer match — you'd need the fork to recompute against the new rect.
 - **Hamming thresholds** (in `CardDao`): `artThreshold = 15`, `fullThreshold = 8`. These mirror the reference scanner; lower = stricter.
 - **Schema is duplicated** between [card_database.dart](lib/src/db/card_database.dart) (`schema`, the empty-DB fallback) and [tool/build_card_db.dart](tool/build_card_db.dart) (`_createSchema`). Keep them in sync.
-- **`CardDatabase.bundledVersion`** (currently `'dev2'`) gates re-copying the asset over a previously installed DB. Bump it after shipping a new `cards.db` or the old one persists on-device.
+- **`CardDatabase.bundledVersion`** (currently `'dev3'`) gates re-copying the asset over a previously installed DB. Bump it after shipping a new `cards.db` or the old one persists on-device.
 
 ## Android toolchain (pinned — do not bump blindly)
 

@@ -1,47 +1,43 @@
 // Builds the bundled `assets/cards.db` SQLite database used by the app for
 // offline perceptual-hash card lookup.
 //
-// Data source: the fab-tabletop project's pre-curated card snapshots
-// (`priv/cards/generated/cards-*.json`), which already include each print's
-// name, set, image URL, art bounding box and orientation.
+// Data source: the `flesh-and-blood-cards` submodule
+// (`flesh-and-blood-cards/json/english/card.json`), a fork that ships
+// PRECOMPUTED perceptual hashes for every printing. Each card carries its
+// gameplay identity (name, pitch) at the top level and a `printings` array;
+// each printing carries `phash_art` / `phash_full` (stringified 63-bit ints),
+// the image URL, set, foiling, edition and art-variation codes.
 //
-// By default the tool DOWNLOADS each card image and RECOMPUTES the perceptual
-// hashes using the same Dart `PHash` code the app runs on-device — this is
-// what keeps the precomputed hashes compatible with live camera captures.
-// Pass `--reuse-phash` to instead copy the hashes already present in the JSON
-// (faster, but only matches if the app uses an identical hash pipeline).
+// Those hashes are computed by the fork's `helper-scripts/calculate-phashes`
+// tool, whose pipeline is byte-for-byte equivalent to this app's Dart `PHash`
+// (same 32x32 area-average downsample, 0.299/0.587/0.114 luma, top-left 8x8
+// DCT block with the DC term excluded, and the regular art rect
+// 0.10/0.16/0.80/0.42 == `ArtBbox.defaultRegular`). So we read the hashes
+// straight from the JSON — no image download, no recompute.
 //
 // Usage:
 //   dart run tool/build_card_db.dart \
-//       [--from <generated_dir>] [--out assets/cards.db] \
-//       [--limit N] [--concurrency 8] [--reuse-phash]
+//       [--from <card.json>] [--out assets/cards.db] [--limit N]
 //
-// Example quick test (50 cards, recompute):
+// Quick test (first 50 cards):
 //   dart run tool/build_card_db.dart --limit 50
 
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:fabscan/src/models/fab_card.dart';
-import 'package:fabscan/src/vision/art_crop.dart';
-import 'package:fabscan/src/vision/phash.dart';
-import 'package:http/http.dart' as http;
-import 'package:image/image.dart' as img;
 import 'package:sqlite3/sqlite3.dart';
 
-const _defaultGenerated =
-    '/home/luke/Storage/Repositories/fab-tabletop/tabletop/priv/cards/generated';
+const _defaultCardJson = 'flesh-and-blood-cards/json/english/card.json';
 const _defaultOut = 'assets/cards.db';
 
 Future<void> main(List<String> args) async {
   final opts = _Options.parse(args);
   stdout.writeln('FabScan card DB builder');
-  stdout.writeln('  source:      ${opts.fromDir}');
+  stdout.writeln('  source:      ${opts.cardJsonPath}');
   stdout.writeln('  output:      ${opts.outPath}');
-  stdout.writeln('  phash:       ${opts.reusePhash ? 'reuse from JSON' : 'recompute from images'}');
   if (opts.limit != null) stdout.writeln('  limit:       ${opts.limit}');
 
-  final cards = _loadCards(opts.fromDir, opts.limit);
+  final cards = _loadCards(opts.cardJsonPath, opts.limit);
   stdout.writeln('Loaded ${cards.length} cards.');
 
   final out = File(opts.outPath);
@@ -53,9 +49,8 @@ Future<void> main(List<String> args) async {
   db.execute('INSERT INTO meta(key, value) VALUES (?, ?)',
       ['version', DateTime.now().toIso8601String()]);
 
-  final client = http.Client();
-  final insertCard =
-      db.prepare('INSERT OR REPLACE INTO cards(id, name, pitch, normalized_name) VALUES (?,?,?,?)');
+  final insertCard = db.prepare(
+      'INSERT OR REPLACE INTO cards(id, name, pitch, normalized_name) VALUES (?,?,?,?)');
   final insertPrint = db.prepare('''
     INSERT OR REPLACE INTO card_prints
       (id, card_id, face_id, set_code, art_type, orientation, layout_position,
@@ -64,57 +59,52 @@ Future<void> main(List<String> args) async {
   ''');
 
   var processed = 0;
-  var hashed = 0;
-  var failed = 0;
+  var hashedPrints = 0;
+  var unhashedPrints = 0;
 
   db.execute('BEGIN');
   for (final card in cards) {
-    final cardId = card.externalId;
     insertCard.execute([
-      cardId,
+      card.id,
       card.name,
       card.pitch,
       card.name.toLowerCase(),
     ]);
 
-    // Recompute hashes for this card's prints (optionally concurrently).
-    final hashesByFace = opts.reusePhash
-        ? <String, _Hashes>{}
-        : await _computeHashes(client, card.prints, opts.concurrency,
-            onError: () => failed++);
-
-    for (final pr in card.prints) {
-      final h = opts.reusePhash
-          ? _Hashes(pr.imagePhash, pr.imagePhashFull)
-          : (hashesByFace[pr.faceId] ?? const _Hashes(null, null));
-      if (h.art != null || h.full != null) hashed++;
+    for (var i = 0; i < card.prints.length; i++) {
+      final pr = card.prints[i];
+      if (pr.artPhash != null || pr.fullPhash != null) {
+        hashedPrints++;
+      } else {
+        unhashedPrints++;
+      }
 
       insertPrint.execute([
-        pr.faceId, // print id == face_id (globally unique)
-        cardId,
-        pr.faceId,
+        pr.id, // printing unique_id (globally unique)
+        card.id,
+        pr.id, // face_id == print id (kept for schema compatibility)
         pr.setCode,
         pr.artType,
-        pr.orientation,
-        pr.layoutPosition,
-        pr.isCanonical ? 1 : 0,
+        card.orientation,
+        i, // layout_position: order within the card's printings
+        i == 0 ? 1 : 0, // first printing is the canonical/default one to show
         pr.imageUrl,
-        pr.artBbox == null ? null : jsonEncode(pr.artBbox!.toJson()),
-        h.art,
-        h.full,
+        null, // art_bbox: the app crops with the fixed ArtBbox.defaultRegular
+        pr.artPhash,
+        pr.fullPhash,
       ]);
     }
 
     processed++;
-    if (processed % 50 == 0) {
-      stdout.writeln('  $processed/${cards.length} cards (hashed prints: $hashed, failures: $failed)');
+    if (processed % 500 == 0) {
+      stdout.writeln('  $processed/${cards.length} cards '
+          '(hashed prints: $hashedPrints, no-hash: $unhashedPrints)');
     }
   }
   db.execute('COMMIT');
 
   insertCard.dispose();
   insertPrint.dispose();
-  client.close();
 
   final cardRows = db.select('SELECT COUNT(*) c FROM cards').first['c'];
   final printRows = db.select('SELECT COUNT(*) c FROM card_prints').first['c'];
@@ -122,8 +112,10 @@ Future<void> main(List<String> args) async {
 
   stdout.writeln('Done. Wrote ${opts.outPath}');
   stdout.writeln('  cards:  $cardRows');
-  stdout.writeln('  prints: $printRows (with hashes: $hashed, image failures: $failed)');
-  stdout.writeln('\nNow ensure pubspec.yaml lists `assets/cards.db` and rebuild the app.');
+  stdout.writeln('  prints: $printRows '
+      '(with hashes: $hashedPrints, without: $unhashedPrints)');
+  stdout.writeln('\nNow bump CardDatabase.bundledVersion, ensure pubspec.yaml '
+      'lists `assets/cards.db`, and rebuild the app.');
 }
 
 void _createSchema(Database db) {
@@ -154,101 +146,39 @@ void _createSchema(Database db) {
   db.execute('CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)');
 }
 
-/// Downloads + hashes a batch of prints with bounded concurrency.
-Future<Map<String, _Hashes>> _computeHashes(
-  http.Client client,
-  List<_Print> prints,
-  int concurrency, {
-  required void Function() onError,
-}) async {
-  final result = <String, _Hashes>{};
-  for (var i = 0; i < prints.length; i += concurrency) {
-    final chunk = prints.skip(i).take(concurrency);
-    final entries = await Future.wait(chunk.map((pr) async {
-      try {
-        final hashes = await _hashOnePrint(client, pr);
-        return MapEntry(pr.faceId, hashes);
-      } catch (_) {
-        onError();
-        return MapEntry(pr.faceId, const _Hashes(null, null));
-      }
-    }));
-    result.addEntries(entries);
-  }
-  return result;
-}
-
-Future<_Hashes> _hashOnePrint(http.Client client, _Print pr) async {
-  if (pr.imageUrl == null) return const _Hashes(null, null);
-  final resp = await client
-      .get(Uri.parse(pr.imageUrl!))
-      .timeout(const Duration(seconds: 20));
-  if (resp.statusCode != 200) {
-    throw HttpException('HTTP ${resp.statusCode} for ${pr.imageUrl}');
-  }
-  final decoded = img.decodeImage(resp.bodyBytes);
-  if (decoded == null) throw const FormatException('decode failed');
-  final rgb = decoded.getBytes(order: img.ChannelOrder.rgb);
-  final w = decoded.width;
-  final h = decoded.height;
-
-  final fullHash = PHash.compute(rgb, w, h, 3);
-  // Use the SAME fixed crop the app uses at scan time (the app can't know the
-  // print's art type from a camera frame), so the DB hash is comparable. This
-  // is the single tuning knob — see ArtBbox.defaultRegular in fab_card.dart.
-  final crop = ArtCrop.extract(rgb, w, h, ArtBbox.defaultRegular);
-  final artHash = PHash.compute(crop.rgb, crop.width, crop.height, 3);
-
-  return _Hashes(artHash, fullHash);
-}
-
-/// Reads and flattens the generated card JSON files.
-List<_Card> _loadCards(String dir, int? limit) {
-  final directory = Directory(dir);
-  if (!directory.existsSync()) {
-    stderr.writeln('Source directory not found: $dir');
+/// Reads and parses the `card.json` array from the submodule.
+List<_Card> _loadCards(String path, int? limit) {
+  final file = File(path);
+  if (!file.existsSync()) {
+    stderr.writeln('Card JSON not found: $path');
+    stderr.writeln('Did you init the submodule? '
+        'git submodule update --init flesh-and-blood-cards');
     exit(1);
   }
-  final files = directory
-      .listSync()
-      .whereType<File>()
-      .where((f) => f.path.endsWith('.json'))
-      .toList()
-    ..sort((a, b) => a.path.compareTo(b.path));
-
+  final data = jsonDecode(file.readAsStringSync());
+  if (data is! List) {
+    stderr.writeln('Expected a JSON array at $path');
+    exit(1);
+  }
   final cards = <_Card>[];
-  for (final file in files) {
-    final data = jsonDecode(file.readAsStringSync());
-    if (data is! List) continue;
-    for (final entry in data) {
-      cards.add(_Card.fromJson(entry as Map<String, Object?>));
-      if (limit != null && cards.length >= limit) return cards;
-    }
+  for (final entry in data) {
+    cards.add(_Card.fromJson(entry as Map<String, Object?>));
+    if (limit != null && cards.length >= limit) break;
   }
   return cards;
 }
 
 class _Options {
-  _Options({
-    required this.fromDir,
-    required this.outPath,
-    required this.limit,
-    required this.concurrency,
-    required this.reusePhash,
-  });
+  _Options({required this.cardJsonPath, required this.outPath, required this.limit});
 
-  final String fromDir;
+  final String cardJsonPath;
   final String outPath;
   final int? limit;
-  final int concurrency;
-  final bool reusePhash;
 
   static _Options parse(List<String> args) {
     String? from;
     String? out;
     int? limit;
-    var concurrency = 8;
-    var reuse = false;
     for (var i = 0; i < args.length; i++) {
       switch (args[i]) {
         case '--from':
@@ -257,53 +187,46 @@ class _Options {
           out = args[++i];
         case '--limit':
           limit = int.parse(args[++i]);
-        case '--concurrency':
-          concurrency = int.parse(args[++i]);
-        case '--reuse-phash':
-          reuse = true;
         default:
           stderr.writeln('Unknown argument: ${args[i]}');
           exit(2);
       }
     }
     return _Options(
-      fromDir: from ?? _defaultGenerated,
+      cardJsonPath: from ?? _defaultCardJson,
       outPath: out ?? _defaultOut,
       limit: limit,
-      concurrency: concurrency,
-      reusePhash: reuse,
     );
   }
 }
 
-class _Hashes {
-  const _Hashes(this.art, this.full);
-  final int? art;
-  final int? full;
-}
-
-/// Minimal parse models for the generated JSON.
+/// Minimal parse models for the flesh-and-blood-cards `card.json`.
 class _Card {
   _Card({
-    required this.externalId,
+    required this.id,
     required this.name,
     required this.pitch,
+    required this.orientation,
     required this.prints,
   });
 
-  final String externalId;
+  final String id;
   final String name;
   final int? pitch;
+  final String orientation; // "horizontal" | "vertical"
   final List<_Print> prints;
 
   factory _Card.fromJson(Map<String, Object?> j) {
-    final prints = (j['card_prints'] as List? ?? const [])
+    final prints = (j['printings'] as List? ?? const [])
         .map((p) => _Print.fromJson(p as Map<String, Object?>))
         .toList();
+    final playedHorizontally = (j['played_horizontally'] as bool?) ?? false;
     return _Card(
-      externalId: (j['external_card_id'] as String?) ?? (j['name'] as String),
+      id: j['unique_id'] as String,
       name: j['name'] as String,
-      pitch: (j['pitch'] as num?)?.toInt(),
+      // pitch ships as a string: '', '1', '2', '3'.
+      pitch: int.tryParse((j['pitch'] as String?)?.trim() ?? ''),
+      orientation: playedHorizontally ? 'horizontal' : 'vertical',
       prints: prints,
     );
   }
@@ -311,47 +234,61 @@ class _Card {
 
 class _Print {
   _Print({
-    required this.faceId,
+    required this.id,
     required this.setCode,
     required this.artType,
-    required this.orientation,
-    required this.layoutPosition,
-    required this.isCanonical,
     required this.imageUrl,
-    required this.artBbox,
-    required this.imagePhash,
-    required this.imagePhashFull,
+    required this.artPhash,
+    required this.fullPhash,
   });
 
-  final String faceId;
+  final String id;
   final String? setCode;
   final String? artType;
-  final String? orientation;
-  final int? layoutPosition;
-  final bool isCanonical;
   final String? imageUrl;
-  final ArtBbox? artBbox;
-  final int? imagePhash;
-  final int? imagePhashFull;
+  final int? artPhash;
+  final int? fullPhash;
 
   factory _Print.fromJson(Map<String, Object?> j) {
-    final bbox = j['art_bbox'];
-    final hasBbox = bbox is Map &&
-        bbox['x'] is num &&
-        bbox['y'] is num &&
-        bbox['w'] is num &&
-        bbox['h'] is num;
+    final variations = (j['art_variations'] as List? ?? const [])
+        .map((v) => v as String)
+        .toList();
     return _Print(
-      faceId: j['face_id'] as String,
-      setCode: j['set_code'] as String?,
-      artType: j['art_type'] as String?,
-      orientation: j['orientation'] as String?,
-      layoutPosition: (j['layout_position'] as num?)?.toInt(),
-      isCanonical: (j['is_canonical'] as bool?) ?? true,
-      imageUrl: j['image_url'] as String?,
-      artBbox: hasBbox ? ArtBbox.fromJson(bbox.cast<String, Object?>()) : null,
-      imagePhash: j['image_phash'] as int?,
-      imagePhashFull: j['image_phash_full'] as int?,
+      id: j['unique_id'] as String,
+      setCode: j['set_id'] as String?,
+      artType: _artTypeFrom(variations),
+      imageUrl: (j['image_url'] as String?)?.trim().isEmpty ?? true
+          ? null
+          : j['image_url'] as String?,
+      artPhash: _parseHash(j['phash_art']),
+      fullPhash: _parseHash(j['phash_full']),
     );
   }
+}
+
+// Art-variation codes -> kebab-case label consumed by CardPrint.variantLabel.
+// No variations means the base print; we tag it "regular" (hidden in the UI).
+const _artVariationNames = {
+  'AB': 'alternate-border',
+  'AA': 'alternate-art',
+  'AT': 'alternate-text',
+  'EA': 'extended-art',
+  'FA': 'full-art',
+  'HS': 'half-size',
+};
+
+String _artTypeFrom(List<String> variations) {
+  if (variations.isEmpty) return 'regular';
+  return variations.map((v) => _artVariationNames[v] ?? v.toLowerCase()).join(' ');
+}
+
+/// Parses a stringified phash to an int, or null when absent/empty.
+int? _parseHash(Object? raw) {
+  if (raw is int) return raw;
+  if (raw is String) {
+    final t = raw.trim();
+    if (t.isEmpty) return null;
+    return int.tryParse(t);
+  }
+  return null;
 }

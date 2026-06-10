@@ -21,7 +21,7 @@ class CardDatabase {
 
   /// Bump this (and the value written by the build tool) to force the bundled
   /// DB to replace a previously-copied one after an app update.
-  static const String bundledVersion = 'dev2';
+  static const String bundledVersion = 'dev3';
 
   /// CREATE statements; kept in sync with `tool/build_card_db.dart`.
   static const List<String> schema = [

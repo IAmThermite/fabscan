@@ -33,15 +33,14 @@ enum ScanState {
 class ScanController extends ChangeNotifier {
   ScanController({
     required this._repository,
-    required RecentsStore recents,
+    required this._recents,
     OcrService? ocr,
     CardDetector? detector,
     this.sampleEvery = 20,
     this.minCaptureScore = 0.55,
     this.runOcr = true,
     this.expandRetryFactor = 0.05,
-  }) : _recents = recents,
-       _ocr = ocr ?? OcrService(),
+  }) : _ocr = ocr ?? OcrService(),
        _detector = detector ?? CardDetector();
 
   final CardRepository _repository;
