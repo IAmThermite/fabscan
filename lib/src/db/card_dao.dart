@@ -244,6 +244,23 @@ class CardDao {
     return cards;
   }
 
+  /// All cards that share [name] (one per pitch), each with its prints loaded,
+  /// ordered by pitch. Used to offer the pitch variations of a recognised card.
+  Future<List<FabCard>> cardsByName(String name) async {
+    final rows = await db.query(
+      'cards',
+      where: 'normalized_name = ?',
+      whereArgs: [name.toLowerCase()],
+      orderBy: 'pitch ASC',
+    );
+    final cards = <FabCard>[];
+    for (final row in rows) {
+      final card = await getCardWithPrints(row['id'] as String);
+      if (card != null) cards.add(card);
+    }
+    return cards;
+  }
+
   /// Free-text fallback search by card name (used when OCR succeeds but the
   /// phash is ambiguous).
   Future<List<FabCard>> searchByName(String query, {int limit = 10}) async {

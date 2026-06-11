@@ -65,6 +65,7 @@ class CardPrint {
     this.artBbox,
     this.imagePhash,
     this.imagePhashFull,
+    this.tcgplayerUrl,
   });
 
   final String id;
@@ -86,6 +87,10 @@ class CardPrint {
 
   final int? imagePhash;
   final int? imagePhashFull;
+
+  /// Deep link to this exact printing's TCGplayer product page, when known.
+  /// Null for prints with no TCGplayer listing — callers fall back to search.
+  final String? tcgplayerUrl;
 
   bool get isHorizontal => orientation == 'horizontal';
 
@@ -120,6 +125,7 @@ class CardPrint {
           : ArtBbox.fromJson(jsonDecode(bboxRaw) as Map<String, Object?>),
       imagePhash: map['image_phash'] as int?,
       imagePhashFull: map['image_phash_full'] as int?,
+      tcgplayerUrl: map['tcgplayer_url'] as String?,
     );
   }
 
@@ -136,6 +142,7 @@ class CardPrint {
         'art_bbox': artBbox == null ? null : jsonEncode(artBbox!.toJson()),
         'image_phash': imagePhash,
         'image_phash_full': imagePhashFull,
+        'tcgplayer_url': tcgplayerUrl,
       };
 }
 

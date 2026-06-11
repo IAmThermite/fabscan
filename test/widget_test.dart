@@ -1,6 +1,7 @@
 import 'package:fabscan/src/db/card_dao.dart';
 import 'package:fabscan/src/models/fab_card.dart';
 import 'package:fabscan/src/models/price_quote.dart';
+import 'package:fabscan/src/pricing/sources/link_out_source.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -26,11 +27,36 @@ void main() {
         orientation: 'vertical',
         imagePhash: 123456789,
         artBbox: ArtBbox.defaultRegular,
+        tcgplayerUrl: 'https://www.tcgplayer.com/product/1?Language=English',
       );
       final restored = CardPrint.fromMap(print.toMap());
       expect(restored.faceId, 'WTR001');
       expect(restored.imagePhash, 123456789);
       expect(restored.artBbox?.w, ArtBbox.defaultRegular.w);
+      expect(restored.tcgplayerUrl,
+          'https://www.tcgplayer.com/product/1?Language=English');
+    });
+  });
+
+  group('LinkOutSource.tcgplayer', () {
+    const card = FabCard(id: 'c1', name: 'Rhinar, Reckless Rampage');
+
+    test('deep-links to the print product page when present', () {
+      const print = CardPrint(
+        id: '1',
+        cardId: 'c1',
+        faceId: 'MST001',
+        tcgplayerUrl: 'https://www.tcgplayer.com/product/551703?Language=English',
+      );
+      expect(LinkOutSource.tcgplayer().searchUrl(card, print),
+          'https://www.tcgplayer.com/product/551703?Language=English');
+    });
+
+    test('falls back to search when the print has no product url', () {
+      const print = CardPrint(id: '2', cardId: 'c1', faceId: 'OMN001');
+      final url = LinkOutSource.tcgplayer().searchUrl(card, print);
+      expect(url, contains('/search/flesh-and-blood-tcg/product'));
+      expect(url, contains('q=Rhinar'));
     });
   });
 

@@ -22,9 +22,12 @@ upright card RGB  (420 × 588)
   │
   └─▼  OcrService.readTitle (Tesseract → text + confidence)  ocr_service.dart
   │
+  └─▼  PitchDetector.detect (HSV vote on top colour strip) pitch_detector.dart
+  │
   ▼  CardRepository.recognize                                card_repository.dart
   │   ├─ title arm: OCR conf ≥ 60 & fuzzy name match  ─► card by name,   card_dao.dart
-  │   │             phash picks the variant                  title_matcher.dart
+  │   │             pitch filters by colour, phash           title_matcher.dart
+  │   │             picks the variant
   │   └─ phash arm: linear Hamming scan, art ≤15 / full ≤8   card_dao.dart
 matched card + variants
   │
@@ -124,6 +127,14 @@ The result is a non-negative 64-bit int (DC bit always 0), stored as a SQLite
 > converted in `_warp` / `captureGuideRegion` before hashing. The build tool
 > feeds RGB too; if the two diverge, matches silently fail.
 
+### 7b. Pitch detection — `PitchDetector.detect` ([pitch_detector.dart](pitch_detector.dart))
+Samples the colour strip at the top of the upright card (Y 1–4%, X 25–75% by
+default), HSV-converts each pixel, skips neutrals (`s < 0.20`) and shadow
+(`v < 0.15`), and buckets the rest by hue: red (`h < 25 ∨ h > 340`), yellow
+(`25–65`), blue (`190–260`). The winning bucket needs a **0.60** share of the
+voting pixels — otherwise it returns null (non-pitch cards, mixed lighting, or
+atypical art). Pure Dart on the same packed RGB the phash hashes.
+
 ### 8. Title OCR — `OcrService.readTitle` ([ocr_service.dart](ocr_service.dart))
 Crops the title strip (y 1%, h 8%, 16% side inset), grayscales and 3×
 nearest-neighbour upscales it, then runs Tesseract via `extractHocr` in
@@ -141,12 +152,14 @@ confidence ≥ `minTitleConfidence` (**60**), `CardDao.matchByTitle`
 ([card_dao.dart](card_dao.dart)) fuzzy-matches it against the card names — a
 normalized Levenshtein ratio with a containment boost
 ([../data/title_matcher.dart](../data/title_matcher.dart)), accepted above a
-similarity of **0.72**. The matched **name decides the card**. Because one name
-can map to several cards (one per pitch — e.g. *Absorb in Aether* 1/2/3), the
-**phash then picks the variant** among those candidates' prints (thresholds
-ignored — the card is already known). With no usable phash signal it falls back
-to the canonical print (pitch can't be resolved without a phash or pitch
-colour). Arm reported as `title`.
+similarity of **0.72**. The matched **name decides the card**. One name can map
+to several cards (one per pitch — e.g. *Absorb in Aether* 1/2/3); when a pitch
+was detected, candidates are filtered to that pitch. If the filter eliminates
+everything (mis-sample or a non-pitch card sharing the name) the unfiltered set
+is kept rather than discarding a real match. The **phash then picks the
+variant** among the remaining candidates' prints (thresholds ignored — the card
+is already known). With no usable phash signal it falls back to the canonical
+print. Arm reported as `title`.
 
 **pHash arm (fallback).** Otherwise `CardDao.matchByPhash`:
 
@@ -207,6 +220,7 @@ dart run tool/build_card_db.dart --limit 50 # quick smoke test
 | [phash.dart](phash.dart) | 32×32 DCT → 64-bit perceptual hash + Hamming distance |
 | [art_crop.dart](art_crop.dart) | Pure-Dart RGB crop shared by app and build tool |
 | [ocr_service.dart](ocr_service.dart) | Tesseract title-bar OCR → text + word-level mean confidence |
+| [pitch_detector.dart](pitch_detector.dart) | HSV vote on the top colour strip → pitch 1 (red) / 2 (yellow) / 3 (blue) |
 | [../data/card_repository.dart](../data/card_repository.dart) | Bridges vision pipeline and the DB; chooses the title vs phash arm; builds debug info |
 | [../data/title_matcher.dart](../data/title_matcher.dart) | Pure-Dart title normalization + Levenshtein fuzzy matching |
 | [../db/card_dao.dart](../db/card_dao.dart) | In-memory pHash cache + multi-arm Hamming matching; fuzzy `matchByTitle` |

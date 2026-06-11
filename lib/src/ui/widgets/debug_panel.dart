@@ -23,6 +23,24 @@ class DebugPanel extends StatelessWidget {
 
   Color _armColor(String arm) => _armColors[arm] ?? Colors.white70;
 
+  static Color _pitchColor(int pitch) => switch (pitch) {
+        1 => const Color(0xFFE57373), // red
+        2 => const Color(0xFFFFD54F), // yellow
+        3 => const Color(0xFF64B5F6), // blue
+        _ => Colors.white70,
+      };
+
+  static String _pitchLabel(int pitch, double? confidence) {
+    final name = switch (pitch) {
+      1 => 'red (1)',
+      2 => 'yellow (2)',
+      3 => 'blue (3)',
+      _ => 'unknown ($pitch)',
+    };
+    if (confidence == null) return name;
+    return '$name  ${(confidence * 100).toStringAsFixed(0)}%';
+  }
+
   @override
   Widget build(BuildContext context) {
     final armColor = _armColor(debug.matchedArm);
@@ -103,6 +121,12 @@ class DebugPanel extends StatelessWidget {
               value: debug.ocrConfidence!.toStringAsFixed(0),
               valueColor:
                   debug.matchedArm == 'title' ? _armColor('title') : null,
+            ),
+          if (debug.detectedPitch != null)
+            _Signal(
+              label: 'Pitch',
+              value: _pitchLabel(debug.detectedPitch!, debug.pitchConfidence),
+              valueColor: _pitchColor(debug.detectedPitch!),
             ),
           const Divider(height: 24),
           _HashRow(

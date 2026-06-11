@@ -21,7 +21,7 @@ class CardDatabase {
 
   /// Bump this (and the value written by the build tool) to force the bundled
   /// DB to replace a previously-copied one after an app update.
-  static const String bundledVersion = 'dev3';
+  static const String bundledVersion = 'dev4';
 
   /// CREATE statements; kept in sync with `tool/build_card_db.dart`.
   static const List<String> schema = [
@@ -45,7 +45,8 @@ class CardDatabase {
       image_url TEXT,
       art_bbox TEXT,
       image_phash INTEGER,
-      image_phash_full INTEGER
+      image_phash_full INTEGER,
+      tcgplayer_url TEXT
     )''',
     'CREATE INDEX IF NOT EXISTS idx_prints_card ON card_prints(card_id)',
     'CREATE INDEX IF NOT EXISTS idx_prints_set ON card_prints(set_code)',

@@ -1,8 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
+import '../data/card_repository.dart';
 import '../models/fab_card.dart';
+import '../models/pitch_variants.dart';
 import '../models/scan_debug_info.dart';
 import 'widgets/debug_panel.dart';
+import 'widgets/pitch_selector.dart';
 import 'widgets/price_panel.dart';
 
 /// Shows the matched card large, its set/foil/art variants in a carousel, and
@@ -27,11 +31,48 @@ class ResultsScreen extends StatefulWidget {
 }
 
 class _ResultsScreenState extends State<ResultsScreen> {
+  // The currently shown pitch-card and one of its prints. Both start at the
+  // recognised card and may switch when the user picks another pitch.
+  late FabCard _card = widget.card;
   late CardPrint _selected = widget.initialPrint;
+  PitchVariantSet? _pitches;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadPitchVariants();
+  }
+
+  Future<void> _loadPitchVariants() async {
+    final set = await context
+        .read<CardRepository>()
+        .pitchVariants(widget.card, widget.initialPrint);
+    if (!mounted) return;
+    setState(() {
+      _pitches = set;
+      // Snap to the matched pitch's representative within the chosen set (a
+      // no-op when the scanned set already holds the pitch options).
+      final v = set.byPitch(widget.card.pitch ?? -1);
+      if (set.hasMultiple && v != null) {
+        _card = v.card;
+        _selected = v.print;
+      }
+    });
+  }
+
+  void _selectPitch(int pitch) {
+    final v = _pitches?.byPitch(pitch);
+    if (v == null) return;
+    setState(() {
+      _card = v.card;
+      _selected = v.print;
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
-    final card = widget.card;
+    final card = _card;
+    final pitches = _pitches;
     return Scaffold(
       appBar: AppBar(title: Text(card.name)),
       body: ListView(
@@ -55,6 +96,14 @@ class _ResultsScreenState extends State<ResultsScreen> {
               ],
             ),
           ),
+          if (pitches != null && pitches.hasMultiple) ...[
+            const _SectionTitle('Pitch'),
+            PitchSelector(
+              variants: pitches.variants,
+              selectedPitch: card.pitch ?? pitches.variants.first.pitch,
+              onSelect: _selectPitch,
+            ),
+          ],
           if (card.prints.length > 1) ...[
             const _SectionTitle('Variants'),
             _VariantCarousel(

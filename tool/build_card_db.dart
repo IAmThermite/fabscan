@@ -54,8 +54,9 @@ Future<void> main(List<String> args) async {
   final insertPrint = db.prepare('''
     INSERT OR REPLACE INTO card_prints
       (id, card_id, face_id, set_code, art_type, orientation, layout_position,
-       is_canonical, image_url, art_bbox, image_phash, image_phash_full)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+       is_canonical, image_url, art_bbox, image_phash, image_phash_full,
+       tcgplayer_url)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
   ''');
 
   var processed = 0;
@@ -92,6 +93,7 @@ Future<void> main(List<String> args) async {
         null, // art_bbox: the app crops with the fixed ArtBbox.defaultRegular
         pr.artPhash,
         pr.fullPhash,
+        pr.tcgplayerUrl,
       ]);
     }
 
@@ -139,7 +141,8 @@ void _createSchema(Database db) {
       image_url TEXT,
       art_bbox TEXT,
       image_phash INTEGER,
-      image_phash_full INTEGER
+      image_phash_full INTEGER,
+      tcgplayer_url TEXT
     )''');
   db.execute('CREATE INDEX idx_prints_card ON card_prints(card_id)');
   db.execute('CREATE INDEX idx_prints_set ON card_prints(set_code)');
@@ -240,6 +243,7 @@ class _Print {
     required this.imageUrl,
     required this.artPhash,
     required this.fullPhash,
+    required this.tcgplayerUrl,
   });
 
   final String id;
@@ -248,6 +252,7 @@ class _Print {
   final String? imageUrl;
   final int? artPhash;
   final int? fullPhash;
+  final String? tcgplayerUrl;
 
   factory _Print.fromJson(Map<String, Object?> j) {
     final variations = (j['art_variations'] as List? ?? const [])
@@ -262,6 +267,9 @@ class _Print {
           : j['image_url'] as String?,
       artPhash: _parseHash(j['phash_art']),
       fullPhash: _parseHash(j['phash_full']),
+      tcgplayerUrl: (j['tcgplayer_url'] as String?)?.trim().isEmpty ?? true
+          ? null
+          : j['tcgplayer_url'] as String?,
     );
   }
 }

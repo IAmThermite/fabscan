@@ -11,6 +11,8 @@ class ScanDebugInfo {
     this.detectorScore,
     this.ocrTitle,
     this.ocrConfidence,
+    this.detectedPitch,
+    this.pitchConfidence,
     this.queryArt,
     this.queryFull,
     this.matchedArtPhash,
@@ -41,6 +43,15 @@ class ScanDebugInfo {
 
   /// Word-level mean OCR confidence (0..100) for [ocrTitle].
   final double? ocrConfidence;
+
+  /// Pitch detected from the colour strip (1 = red, 2 = yellow, 3 = blue), or
+  /// null when no hue won by a clear margin (non-pitch cards, uncertain
+  /// lighting). Used by the title arm to disambiguate cards that share a name
+  /// across pitches (e.g. *Absorb in Aether* 1/2/3).
+  final int? detectedPitch;
+
+  /// Winning hue's share of the voting pixels (0..1).
+  final double? pitchConfidence;
 
   /// Hashes computed live from the capture.
   final int? queryArt;

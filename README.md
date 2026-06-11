@@ -35,16 +35,86 @@ thresholds — 15 for art crops, 8 for the whole-card hash).
 | [lib/src/ui/](lib/src/ui/) | Scan screen, results + variant carousel, recents |
 | [tool/build_card_db.dart](tool/build_card_db.dart) | Generates `assets/cards.db` |
 
-## Setup
+## Build & install
+
+Prerequisites: **Flutter SDK** (`flutter doctor` should be green), and an
+Android device/emulator or — for iOS — a Mac with Xcode + CocoaPods.
+
+On the **first Android build**, `opencv_dart` downloads the OpenCV SDK (~100 MB)
+via CMake, so expect a slow first compile. `assets/tessdata/eng.traineddata`
+(Tesseract English data) is already bundled.
+
+### Dev (debug, hot reload)
 
 ```bash
 flutter pub get
-flutter run            # on a connected Android device
+flutter devices              # confirm a device/emulator is attached
+flutter run                  # debug build, deploy, attach for hot reload
 ```
 
-On the **first Android build**, `opencv_dart` downloads the OpenCV SDK (~100 MB)
-via CMake — expect a slow first compile. `assets/tessdata/eng.traineddata`
-(Tesseract English data) is already bundled.
+Press `r` for hot reload, `R` for hot restart. Splash and launcher-icon changes
+are **native** resources — they need a full stop + `flutter run` to take effect.
+
+### Release — Android
+
+```bash
+flutter build apk --release                 # universal APK
+flutter build apk --release --split-per-abi # smaller per-ABI APKs
+flutter build appbundle --release           # .aab for Google Play
+```
+
+Outputs:
+
+| Artifact | Path |
+|----------|------|
+| Universal APK | `build/app/outputs/flutter-apk/app-release.apk` |
+| Per-ABI APKs  | `build/app/outputs/flutter-apk/app-{armeabi-v7a,arm64-v8a,x86_64}-release.apk` |
+| App bundle    | `build/app/outputs/bundle/release/app-release.aab` |
+
+Install a built APK to a connected device:
+
+```bash
+adb install -r build/app/outputs/flutter-apk/app-release.apk
+# or, build + install in one step on the connected device:
+flutter install --release
+```
+
+> ⚠️ **Release is debug-signed.** [android/app/build.gradle.kts](android/app/build.gradle.kts)
+> uses the debug keystore for the `release` build type so `flutter run --release`
+> works locally. Before publishing, add a real `signingConfig` and set a unique
+> `applicationId` (currently `com.example.fabscan`).
+
+### Release — iOS (Mac only)
+
+iOS can't be built from Linux; you need macOS + Xcode + CocoaPods. From a Mac:
+
+```bash
+flutter pub get
+cd ios && pod install && cd ..   # auto-runs on the first flutter ios build
+flutter build ipa --release      # archive + export an .ipa via Xcode
+# or for a quick run on a connected device / simulator:
+flutter run --release
+```
+
+The first iOS build on a fresh checkout will generate `ios/Podfile`. Before
+release, set a real bundle identifier (currently `com.example.fabscan`) in
+Xcode and remember the manual **OCR tessdata** step described in
+[CLAUDE.md](CLAUDE.md#ios) (drag `assets/tessdata` into the Runner target as a
+folder reference).
+
+### Regenerating launcher icon & splash
+
+If you change `assets/icon.png` or `assets/splash.png` (config lives in
+[pubspec.yaml](pubspec.yaml)):
+
+```bash
+dart run flutter_launcher_icons
+dart run flutter_native_splash:create
+```
+
+These rewrite native resources, so after running them: stop the app,
+`adb uninstall com.example.fabscan` (Android caches launcher icons), then
+`flutter run` again.
 
 ### Building the card database
 

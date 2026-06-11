@@ -13,6 +13,7 @@ import '../vision/art_crop.dart';
 import '../vision/camera_utils.dart';
 import '../vision/card_detector.dart';
 import '../vision/ocr_service.dart';
+import '../vision/pitch_detector.dart';
 
 enum ScanState {
   initializing,
@@ -36,17 +37,20 @@ class ScanController extends ChangeNotifier {
     required this._recents,
     OcrService? ocr,
     CardDetector? detector,
+    PitchDetector? pitchDetector,
     this.sampleEvery = 20,
     this.minCaptureScore = 0.55,
     this.runOcr = true,
     this.expandRetryFactor = 0.05,
   }) : _ocr = ocr ?? OcrService(),
-       _detector = detector ?? CardDetector();
+       _detector = detector ?? CardDetector(),
+       _pitchDetector = pitchDetector ?? const PitchDetector();
 
   final CardRepository _repository;
   final RecentsStore _recents;
   final OcrService _ocr;
   final CardDetector _detector;
+  final PitchDetector _pitchDetector;
 
   /// Process one frame out of every [sampleEvery] delivered by the stream.
   final int sampleEvery;
@@ -160,6 +164,14 @@ class ScanController extends ChangeNotifier {
         ocrConfidence = ocr.confidence;
       }
 
+      // Pitch is a property of the card, not the crop, so detect once on the
+      // initial detection and reuse the result for any expand-retry.
+      final pitch = _pitchDetector.detect(
+        detection.cardRgb,
+        detection.cardWidth,
+        detection.cardHeight,
+      );
+
       // Diagnostics: log the closest candidates (ignoring thresholds) so poor
       // matching can be debugged from logcat even when nothing matches.
       if (kDebugMode) {
@@ -174,6 +186,7 @@ class ScanController extends ChangeNotifier {
           '[fabscan] source=${detection.source} '
           'score=${detection.score.toStringAsFixed(2)} '
           'ocr="${title ?? ''}" conf=${ocrConfidence?.toStringAsFixed(0) ?? '-'} '
+          'pitch=${pitch?.pitch ?? '-'} '
           'closest: $summary',
         );
       }
@@ -182,6 +195,7 @@ class ScanController extends ChangeNotifier {
         detection,
         title: title,
         ocrConfidence: ocrConfidence,
+        pitch: pitch,
         ocr: ocr,
       );
 
@@ -199,6 +213,7 @@ class ScanController extends ChangeNotifier {
             expanded,
             title: title,
             ocrConfidence: ocrConfidence,
+            pitch: pitch,
             ocr: ocr,
           );
         }
@@ -219,6 +234,7 @@ class ScanController extends ChangeNotifier {
     CardDetection detection, {
     required String? title,
     required double? ocrConfidence,
+    required PitchResult? pitch,
     required OcrResult? ocr,
   }) async {
     final hashes = detection.computeHashes();
@@ -232,6 +248,8 @@ class ScanController extends ChangeNotifier {
       ScanHashes(art: hashes.art, full: hashes.full),
       ocrTitle: title,
       ocrConfidence: ocrConfidence,
+      detectedPitch: pitch?.pitch,
+      pitchConfidence: pitch?.confidence,
       detectorScore: detection.score,
       detectSource: detection.source,
       capturedCardPng: _encodeRgbPng(

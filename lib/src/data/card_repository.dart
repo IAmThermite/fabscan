@@ -2,6 +2,7 @@ import 'dart:typed_data';
 
 import '../db/card_dao.dart';
 import '../models/fab_card.dart';
+import '../models/pitch_variants.dart';
 import '../models/scan_debug_info.dart';
 import '../vision/phash.dart';
 
@@ -71,6 +72,8 @@ class CardRepository {
     ScanHashes hashes, {
     String? ocrTitle,
     double? ocrConfidence,
+    int? detectedPitch,
+    double? pitchConfidence,
     double? detectorScore,
     String? detectSource,
     Uint8List? capturedCardPng,
@@ -83,7 +86,16 @@ class CardRepository {
         ocrTitle.trim().isNotEmpty &&
         ocrConfidence != null &&
         ocrConfidence >= minTitleConfidence) {
-      final titleCards = await _dao.matchByTitle(ocrTitle);
+      var titleCards = await _dao.matchByTitle(ocrTitle);
+      // Pitch resolves the name → multiple-cards ambiguity (e.g. Absorb in
+      // Aether 1/2/3). If the colour vote doesn't match any candidate (e.g.
+      // mis-sample, or the title also matched a non-pitch card) we keep the
+      // unfiltered set rather than throw away a real match.
+      if (detectedPitch != null) {
+        final filtered =
+            titleCards.where((c) => c.pitch == detectedPitch).toList();
+        if (filtered.isNotEmpty) titleCards = filtered;
+      }
       final pick = _pickByPhash(titleCards, hashes);
       if (pick != null) {
         return _buildResult(
@@ -95,6 +107,8 @@ class CardRepository {
           hashes: hashes,
           ocrTitle: ocrTitle,
           ocrConfidence: ocrConfidence,
+          detectedPitch: detectedPitch,
+          pitchConfidence: pitchConfidence,
           detectorScore: detectorScore,
           detectSource: detectSource,
           capturedCardPng: capturedCardPng,
@@ -126,6 +140,8 @@ class CardRepository {
       hashes: hashes,
       ocrTitle: ocrTitle,
       ocrConfidence: ocrConfidence,
+      detectedPitch: detectedPitch,
+      pitchConfidence: pitchConfidence,
       detectorScore: detectorScore,
       detectSource: detectSource,
       capturedCardPng: capturedCardPng,
@@ -152,6 +168,8 @@ class CardRepository {
     required List<ScanCandidate> candidates,
     String? ocrTitle,
     double? ocrConfidence,
+    int? detectedPitch,
+    double? pitchConfidence,
     double? detectorScore,
     String? detectSource,
     Uint8List? capturedCardPng,
@@ -167,6 +185,8 @@ class CardRepository {
       detectorScore: detectorScore,
       ocrTitle: ocrTitle,
       ocrConfidence: ocrConfidence,
+      detectedPitch: detectedPitch,
+      pitchConfidence: pitchConfidence,
       queryArt: hashes.art,
       queryFull: hashes.full,
       matchedArtPhash: matchedPrint.imagePhash,
@@ -262,6 +282,21 @@ class CardRepository {
       _dao.diagnoseClosest(hashes);
 
   Future<FabCard?> cardById(String cardId) => _dao.getCardWithPrints(cardId);
+
+  /// The pitch variations to offer for [matchedCard], preferring those printed
+  /// in the same set as [matchedPrint]. Returns [PitchVariantSet.empty] when the
+  /// card has no set with two or more pitches.
+  Future<PitchVariantSet> pitchVariants(
+    FabCard matchedCard,
+    CardPrint matchedPrint,
+  ) async {
+    final named = await _dao.cardsByName(matchedCard.name);
+    return resolvePitchVariants(
+      namedCards: named,
+      matchedCard: matchedCard,
+      matchedPrint: matchedPrint,
+    );
+  }
 
   Future<List<FabCard>> searchByName(String query) => _dao.searchByName(query);
 }
