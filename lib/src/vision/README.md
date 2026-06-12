@@ -2,9 +2,7 @@
 
 How FabScan turns a live camera frame into a recognised Flesh and Blood card.
 Everything here runs **offline**, inline on the main isolate, against the
-bundled SQLite database of precomputed perceptual hashes. It is a Dart port of
-the `fab-tabletop` reference scanner (same edge strategies, art-crop ratios, DCT
-pHash, and Hamming thresholds).
+bundled SQLite database of precomputed perceptual hashes.
 
 ## At a glance
 

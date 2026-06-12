@@ -6,7 +6,7 @@ import '../../models/scan_debug_info.dart';
 import '../../vision/phash.dart';
 
 /// Collapsible diagnostics for how the current card was recognised — modelled
-/// on the "Detection signals" panel in fab-tabletop. Shows the matched pHash
+/// on the "Detection signals". Shows the matched pHash
 /// arm (the "detect method"), Hamming distances, OCR text and the deskewed
 /// capture that was hashed.
 class DebugPanel extends StatelessWidget {

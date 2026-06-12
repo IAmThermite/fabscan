@@ -1,8 +1,6 @@
 // HSV vote-based detection of a Flesh and Blood card's pitch colour
 // (1 = red, 2 = yellow, 3 = blue) from the coloured strip at the top of an
-// upright, deskewed card. Ported from the `fab-tabletop` reference scanner —
-// same sample window, saturation/value gates, hue buckets and majority
-// threshold so behaviour stays comparable.
+// upright, deskewed card.
 //
 // Pure Dart on top of a packed RGB buffer; no Flutter / OpenCV imports so it
 // can be unit-tested in isolation and called inline on every frame.

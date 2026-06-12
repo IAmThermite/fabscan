@@ -58,7 +58,7 @@ class ScanHashesResult {
 }
 
 /// Detects a Flesh and Blood card in a BGR frame and returns the deskewed
-/// upright card. Ported from the fab-tabletop scanner_worker.js logic.
+/// upright card.
 class CardDetector {
   CardDetector({this.artBbox = ArtBbox.defaultRegular});
 

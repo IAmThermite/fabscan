@@ -160,8 +160,6 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
     if (cam == null || !cam.value.isInitialized) {
       return const Center(child: CircularProgressIndicator());
     }
-    final detecting = _controller.lastQuad != null;
-    final color = detecting ? Colors.greenAccent : Colors.white70;
 
     // Upright (portrait) frame dimensions, used to place the guide so it lines
     // up exactly with the region CardDetector.captureGuideRegion will crop.
@@ -184,20 +182,39 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
               color: Colors.white.withValues(alpha: 0.55),
             ),
           ),
-        // Detected contour outline (only when contour detection is driving).
-        CustomPaint(
-          painter: CardOverlayPainter(
-            quad: _controller.lastQuad,
-            frameSize: _controller.frameSize,
-            quarterTurns: (cam.description.sensorOrientation ~/ 90),
-            color: color,
-          ),
-        ),
-        Positioned(
-          left: 0,
-          right: 0,
-          bottom: 24,
-          child: Center(child: _StatusPill(state: _controller.state, detecting: detecting)),
+        // Detected contour outline + status pill. These update every sampled
+        // frame, so they listen to the overlay notifier directly rather than
+        // rebuilding the whole preview (camera view + guide) on each frame.
+        ValueListenableBuilder<ScanOverlay>(
+          valueListenable: _controller.overlay,
+          builder: (context, overlay, _) {
+            final detecting = overlay.quad != null;
+            final color = detecting ? Colors.greenAccent : Colors.white70;
+            return Stack(
+              fit: StackFit.expand,
+              children: [
+                CustomPaint(
+                  painter: CardOverlayPainter(
+                    quad: overlay.quad,
+                    frameSize: overlay.frameSize,
+                    quarterTurns: (cam.description.sensorOrientation ~/ 90),
+                    color: color,
+                  ),
+                ),
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 24,
+                  child: Center(
+                    child: _StatusPill(
+                      state: _controller.state,
+                      detecting: detecting,
+                    ),
+                  ),
+                ),
+              ],
+            );
+          },
         ),
         if (_controller.state == ScanState.matched)
           const Center(child: CircularProgressIndicator()),

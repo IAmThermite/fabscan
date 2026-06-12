@@ -1,7 +1,19 @@
+import java.util.Properties
+import java.io.FileInputStream
+
 plugins {
     id("com.android.application")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
+}
+
+// Shared dev signing: if android/key.properties exists, sign every build with the
+// committed-out-of-git fabscan-shared.jks so the installed app is never force-uninstalled
+// on rebuilds or across machines. If it's absent, fall back to the per-machine debug keys.
+val keystorePropertiesFile = rootProject.file("key.properties")
+val useSharedSigning = keystorePropertiesFile.exists()
+val keystoreProperties = Properties().apply {
+    if (useSharedSigning) FileInputStream(keystorePropertiesFile).use { load(it) }
 }
 
 android {
@@ -24,11 +36,31 @@ android {
         versionName = flutter.versionName
     }
 
+    if (useSharedSigning) {
+        signingConfigs {
+            create("shared") {
+                keyAlias = keystoreProperties["keyAlias"] as String
+                keyPassword = keystoreProperties["keyPassword"] as String
+                storeFile = file(keystoreProperties["storeFile"] as String)
+                storePassword = keystoreProperties["storePassword"] as String
+            }
+        }
+    }
+
     buildTypes {
+        // Sign debug and release with the same key so the on-device app updates in place
+        // instead of being uninstalled/reinstalled. Falls back to debug keys if key.properties
+        // is missing (e.g. a fresh machine that hasn't copied it yet).
+        val signing = if (useSharedSigning) {
+            signingConfigs.getByName("shared")
+        } else {
+            signingConfigs.getByName("debug")
+        }
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signing
+        }
+        debug {
+            signingConfig = signing
         }
     }
 }

@@ -1,7 +1,7 @@
 import 'dart:typed_data';
 
 /// Diagnostic information about how a card was recognised, surfaced in the
-/// debug panel (mirrors the "Detection signals" block in fab-tabletop).
+/// debug panel.
 class ScanDebugInfo {
   const ScanDebugInfo({
     required this.matchedArm,
@@ -76,6 +76,37 @@ class ScanDebugInfo {
   final List<ScanCandidate> candidates;
 
   bool get usedOcr => ocrTitle != null && ocrTitle!.isNotEmpty;
+
+  /// Returns a copy with the capture PNGs replaced. The PNGs are encoded only
+  /// for the frame that actually matched (not every sampled frame), so they're
+  /// attached here after recognition succeeds.
+  ScanDebugInfo withCaptures({
+    Uint8List? capturedCardPng,
+    Uint8List? capturedArtPng,
+    Uint8List? capturedTitleRawPng,
+    Uint8List? capturedTitleOcrPng,
+  }) {
+    return ScanDebugInfo(
+      matchedArm: matchedArm,
+      distance: distance,
+      threshold: threshold,
+      detectSource: detectSource,
+      detectorScore: detectorScore,
+      ocrTitle: ocrTitle,
+      ocrConfidence: ocrConfidence,
+      detectedPitch: detectedPitch,
+      pitchConfidence: pitchConfidence,
+      queryArt: queryArt,
+      queryFull: queryFull,
+      matchedArtPhash: matchedArtPhash,
+      matchedFullPhash: matchedFullPhash,
+      capturedCardPng: capturedCardPng,
+      capturedArtPng: capturedArtPng,
+      capturedTitleRawPng: capturedTitleRawPng,
+      capturedTitleOcrPng: capturedTitleOcrPng,
+      candidates: candidates,
+    );
+  }
 }
 
 /// One ranked candidate from the pHash lookup.

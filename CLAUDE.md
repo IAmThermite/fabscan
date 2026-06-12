@@ -9,8 +9,7 @@ with the camera and shows the card, its set/foil/art variants, and third-party p
 Android is the primary, build-verified target; iOS is supported but must be built and
 tested on a Mac (see the iOS section below). Everything
 except pricing runs offline against a bundled SQLite database of precomputed perceptual
-hashes. The vision pipeline is a Dart port of the `fab-tabletop` reference scanner at
-`/home/luke/Storage/Repositories/fab-tabletop/` (see `tabletop/assets/js/card_scanner/`).
+hashes.
 
 ## Commands
 
@@ -66,6 +65,20 @@ cross isolates trivially; moving it off-main is a known follow-up). Per frame:
 - **Title arm (preferred when OCR is confident):** if `ocrConfidence >= minTitleConfidence` (default 60) and `CardDao.matchByTitle` fuzzy-matches the read title to a card name (normalized Levenshtein + containment, similarity ≥ `minTitleSimilarity` 0.72, in [title_matcher.dart](lib/src/data/title_matcher.dart)), the **name decides the card** and the phash picks the variant. When the same name maps to several cards (one per pitch — e.g. *Absorb in Aether* 1/2/3), `PitchDetector` ([pitch_detector.dart](lib/src/vision/pitch_detector.dart)) HSV-votes red/yellow/blue from the colour strip at the top of the deskewed card to filter to the right pitch before the phash variant pick. Pitch is used **only in the title arm** — it doesn't gate the phash arm, where pitch is already implicit in the hash, so a mis-sampled border can't reject a correct phash match. Falls back to canonical when there's no phash signal.
 - **pHash arm (fallback):** `CardDao.matchByPhash` ([card_dao.dart](lib/src/db/card_dao.dart)) loads **all** print hashes into memory once (`_ensureCache`) and does a linear Hamming-distance scan per capture — the FAB set is only a few thousand rows. **Multi-arm**: compares `art` and `full` hashes and keeps the best arm under its threshold.
 
+## Pitch selector (results screen)
+
+Recognition returns a single pitch (one `FabCard` per `name`+`pitch`). The results screen
+([results_screen.dart](lib/src/ui/results_screen.dart)) then offers the **other pitches** of
+that name as tappable coloured circles ([pitch_selector.dart](lib/src/ui/widgets/pitch_selector.dart),
+red 1 / yellow 2 / blue 3). `CardRepository.pitchVariants` loads the sibling cards
+(`CardDao.cardsByName`, exact `normalized_name`) and the **pure** `resolvePitchVariants`
+([pitch_variants.dart](lib/src/models/pitch_variants.dart)) groups them into one coherent set:
+it prefers the **scanned print's set** when that set holds ≥2 pitches, else the **first set (in
+encounter order) that does**, and returns empty when no set has more than one pitch (selector
+hidden). The matched pitch keeps the exact scanned print when it's in the chosen set, so the
+view doesn't jump on load. Switching pitch swaps the active card → the variant carousel and
+price panel re-key off the new print. Keep the resolver Flutter-free (it's unit-tested directly).
+
 ## Invariants you must not break
 
 - **RGB everywhere into `PHash`.** `PHash.compute` ([phash.dart](lib/src/vision/phash.dart)) and the build tool both feed **RGB** pixels. Camera buffers are BGR — convert before hashing or matches silently fail.
@@ -73,7 +86,7 @@ cross isolates trivially; moving it off-main is a known follow-up). Per frame:
 - **One art-crop tuning knob.** At scan time the app can't know a print's art type, so the app crops the art region with the fixed `ArtBbox.defaultRegular` ([fab_card.dart](lib/src/models/fab_card.dart) line 175) via the pure-Dart `ArtCrop.extract` ([art_crop.dart](lib/src/vision/art_crop.dart)), and the submodule's hash pipeline crops the identical `REGULAR_ART_BBOX = (0.10, 0.16, 0.80, 0.42)`. Change the app side and the stored hashes no longer match — you'd need the fork to recompute against the new rect.
 - **Hamming thresholds** (in `CardDao`): `artThreshold = 15`, `fullThreshold = 8`. These mirror the reference scanner; lower = stricter.
 - **Schema is duplicated** between [card_database.dart](lib/src/db/card_database.dart) (`schema`, the empty-DB fallback) and [tool/build_card_db.dart](tool/build_card_db.dart) (`_createSchema`). Keep them in sync.
-- **`CardDatabase.bundledVersion`** (currently `'dev3'`) gates re-copying the asset over a previously installed DB. Bump it after shipping a new `cards.db` or the old one persists on-device.
+- **`CardDatabase.bundledVersion`** (currently `'dev4'`) gates re-copying the asset over a previously installed DB. Bump it after shipping a new `cards.db` or the old one persists on-device.
 
 ## Android toolchain (pinned — do not bump blindly)
 
@@ -114,7 +127,9 @@ Things that differ from Android and must not regress:
 Pluggable via `PriceSource` ([lib/src/pricing/](lib/src/pricing/)), registered in
 `PricingService`. MinMaxGames (AUD) and Fluke & Box (NZD) fetch live from Shopify's public
 `/search/suggest.json` (no API key, via `ShopifySource`); TCGplayer and Cardmarket have no
-open price API so they deep-link out. User locale is NZ.
+open price API so they deep-link out (`LinkOutSource`). TCGplayer prefers the recognised
+printing's `tcgplayer_url` (stored per print in the DB) and falls back to a name search when
+it's absent; Cardmarket always searches by name. User locale is NZ.
 
 ## Wiring
 

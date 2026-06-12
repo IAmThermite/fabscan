@@ -14,12 +14,14 @@ camera frame ──► OpenCV: find card edges, deskew to an upright card
               ──► crop the art region, compute a 64-bit perceptual hash (pHash)
               ──► Tesseract: read the title bar (disambiguation aid)
               ──► look up the pHash in the bundled SQLite DB (Hamming distance)
-              ──► show the card + variants ──► fetch prices ──► save to recents (24h)
+              ──► show the card + set/foil/art variants + pitch options
+              ──► fetch prices ──► save to recents (24h)
 ```
 
-The vision pipeline is a Dart port of the proven scanner in the `fab-tabletop`
-project (same edge-detection strategies, art bbox ratios, DCT pHash and Hamming
-thresholds — 15 for art crops, 8 for the whole-card hash).
+On the results screen, coloured circles (red 1 / yellow 2 / blue 3) let you flick
+between the **pitch variations** of a card — drawn from the scanned printing's set
+when it holds more than one pitch, otherwise the first set that does.
+
 
 ## Project layout
 
@@ -32,8 +34,9 @@ thresholds — 15 for art crops, 8 for the whole-card hash).
 | [lib/src/db/](lib/src/db/) | Bundled card DB loader, pHash matching DAO, 24h recents store |
 | [lib/src/scan/scan_controller.dart](lib/src/scan/scan_controller.dart) | Frame sampling + recognition orchestration |
 | [lib/src/pricing/](lib/src/pricing/) | Pluggable price sources (Shopify live fetch + link-outs) |
-| [lib/src/ui/](lib/src/ui/) | Scan screen, results + variant carousel, recents |
-| [tool/build_card_db.dart](tool/build_card_db.dart) | Generates `assets/cards.db` |
+| [lib/src/ui/](lib/src/ui/) | Scan screen, results + variant carousel + pitch selector, recents |
+| [lib/src/models/pitch_variants.dart](lib/src/models/pitch_variants.dart) | Resolves a card's same-set pitch variations for the selector |
+| [tool/build_card_db.dart](tool/build_card_db.dart) | Generates `assets/cards.db` from the `flesh-and-blood-cards` submodule |
 
 ## Build & install
 
@@ -118,25 +121,28 @@ These rewrite native resources, so after running them: stop the app,
 
 ### Building the card database
 
-`assets/cards.db` is generated from the `fab-tabletop` card snapshots. The
-hashes must be produced by the **same Dart pipeline** the app runs on-device, so
-the default mode downloads each card image and recomputes them:
+`assets/cards.db` is generated from the **`flesh-and-blood-cards`** git submodule
+(the [IAmThermite fork](https://github.com/IAmThermite/flesh-and-blood-cards) on its
+`feature/card-art-hashes` branch), which ships **precomputed** perceptual hashes for
+every printing. Those hashes are produced by a pipeline byte-for-byte equivalent to
+the app's Dart `PHash`, so the tool reads them straight from the JSON — no image
+download, no recompute (fast):
 
 ```bash
-# Full database (downloads ~9k card images; one-time, several minutes)
+# One-time: fetch the submodule if you didn't clone with --recurse-submodules
+git submodule update --init flesh-and-blood-cards
+
+# Full database (reads the submodule's JSON; seconds, no network)
 dart run tool/build_card_db.dart
 
 # Quick test against 50 cards
 dart run tool/build_card_db.dart --limit 50
-
-# Fast path: reuse the hashes already in the JSON (NOTE: these were computed by
-# the reference project's pipeline and will NOT match live camera hashes — use
-# only for populating names/images/variants while developing the UI).
-dart run tool/build_card_db.dart --reuse-phash
 ```
 
-Output goes to `assets/cards.db` by default (`--out` to change). If the asset is
-missing the app still launches with an empty database (no matches).
+Output goes to `assets/cards.db` by default (`--out` to change; `--from` overrides
+the source `card.json` path). If the asset is missing the app still launches with an
+empty database (no matches). See [CLAUDE.md](CLAUDE.md) for the constraint that keeps
+the submodule's hashes compatible with live camera captures.
 
 ## Pricing sources
 
@@ -144,8 +150,10 @@ Pricing is pluggable via [`PriceSource`](lib/src/pricing/price_source.dart):
 
 - **MinMaxGames**, **Fluke & Box** — Shopify storefronts; live prices are
   fetched from their public `/search/suggest.json` endpoint (no API key).
-- **TCGplayer**, **Cardmarket** — no open price API, so these deep-link to the
-  site's search results.
+- **TCGplayer** — no open price API, so it deep-links out. When the recognised
+  printing carries a TCGplayer product URL (most do, from the card data) it links
+  straight to that product page; otherwise it falls back to a name search.
+- **Cardmarket** — no open price API, so it deep-links to the site's search results.
 
 Add a new store by implementing `PriceSource` (or extending `ShopifySource`)
 and registering it in [`PricingService`](lib/src/pricing/pricing_service.dart).
@@ -156,8 +164,8 @@ and registering it in [`PricingService`](lib/src/pricing/pricing_service.dart).
   and unit tests pass; the OpenCV/Tesseract native build should be run on-device.
 - Per-frame detection runs on the main isolate (throttled). Moving it to an
   isolate is a follow-up (FFI `Mat`s don't cross isolates trivially).
-- Horizontal-layout cards use only the whole-card hash for now; the left/right
-  half hashes aren't recomputed by the tool yet.
+- Horizontal-layout cards carry no art-crop hash in the card data (the art rect
+  assumes an upright card), so they match on the whole-card hash only.
 - The live overlay's frame→preview mapping is best-effort and may need tuning
   per device orientation.
 - Set a real `applicationId` (currently `com.example.fabscan`) before release.

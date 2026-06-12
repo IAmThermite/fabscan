@@ -25,6 +25,17 @@ class RecognitionResult {
 
   /// Diagnostics for the debug panel.
   final ScanDebugInfo debug;
+
+  /// Returns a copy with a new [debug] payload (used to attach the capture PNGs
+  /// once, after a match, rather than encoding them on every sampled frame).
+  RecognitionResult withDebug(ScanDebugInfo debug) => RecognitionResult(
+        card: card,
+        matchedPrint: matchedPrint,
+        distance: distance,
+        arm: arm,
+        debug: debug,
+        ocrTitle: ocrTitle,
+      );
 }
 
 /// Which print of a title-matched card the phash selected.

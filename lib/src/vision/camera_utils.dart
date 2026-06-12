@@ -3,20 +3,67 @@ import 'dart:typed_data';
 import 'package:camera/camera.dart';
 import 'package:opencv_dart/opencv_dart.dart' as cv;
 
+/// A single YUV plane, reduced to the plain, isolate-sendable fields the NV21
+/// repack needs (the raw bytes plus the strides). [CameraImage]'s own plane
+/// objects aren't sendable across isolates, so we copy these out on the root
+/// isolate before handing a frame to the CV worker.
+class CameraPlane {
+  const CameraPlane(this.bytes, this.bytesPerRow, this.bytesPerPixel);
+
+  final Uint8List bytes;
+  final int bytesPerRow;
+  final int? bytesPerPixel;
+}
+
+/// An isolate-sendable snapshot of a camera frame: just the plane bytes and
+/// geometry. Build one from a [CameraImage] on the root isolate via
+/// [CameraFrame.fromCameraImage], then send it to the CV worker.
+class CameraFrame {
+  const CameraFrame({
+    required this.width,
+    required this.height,
+    required this.planes,
+  });
+
+  final int width;
+  final int height;
+  final List<CameraPlane> planes;
+
+  /// Snapshots [image] into a sendable [CameraFrame], or returns null for an
+  /// unexpected (non-YUV420) format.
+  static CameraFrame? fromCameraImage(CameraImage image) {
+    if (image.format.group != ImageFormatGroup.yuv420) return null;
+    return CameraFrame(
+      width: image.width,
+      height: image.height,
+      planes: [
+        for (final p in image.planes)
+          CameraPlane(p.bytes, p.bytesPerRow, p.bytesPerPixel),
+      ],
+    );
+  }
+}
+
 /// Converts a [CameraImage] from the camera stream into a BGR OpenCV [cv.Mat].
+/// Convenience wrapper around [cameraFrameToBgr] for the inline (non-isolate)
+/// path. The caller owns the returned Mat and must dispose it.
+cv.Mat? cameraImageToBgr(CameraImage image) {
+  final frame = CameraFrame.fromCameraImage(image);
+  if (frame == null) return null; // Unexpected format — handled elsewhere.
+  return cameraFrameToBgr(frame);
+}
+
+/// Converts a [CameraFrame] into a BGR OpenCV [cv.Mat].
 ///
 /// Both platforms stream YUV420, but with different chroma layouts: Android
 /// delivers YUV_420_888 (3 planes — separate U and V), iOS delivers
 /// 420YpCbCr8BiPlanar (2 planes — Y plus one interleaved CbCr plane). We repack
 /// either into NV21 (Y plane followed by interleaved V/U) and let OpenCV convert
 /// to BGR. The caller owns the returned Mat and must dispose it.
-cv.Mat? cameraImageToBgr(CameraImage image) {
-  if (image.format.group != ImageFormatGroup.yuv420) {
-    return null; // Unexpected format — handled elsewhere.
-  }
-  final nv21 = _yuv420ToNv21(image);
-  final width = image.width;
-  final height = image.height;
+cv.Mat cameraFrameToBgr(CameraFrame frame) {
+  final nv21 = _yuv420ToNv21(frame);
+  final width = frame.width;
+  final height = frame.height;
 
   // NV21 buffer is height*1.5 rows of `width` bytes, single channel.
   final yuvMat = cv.Mat.fromList(
@@ -32,7 +79,7 @@ cv.Mat? cameraImageToBgr(CameraImage image) {
   }
 }
 
-Uint8List _yuv420ToNv21(CameraImage image) {
+Uint8List _yuv420ToNv21(CameraFrame image) {
   final width = image.width;
   final height = image.height;
   final yPlane = image.planes[0];

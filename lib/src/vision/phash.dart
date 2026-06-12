@@ -1,8 +1,7 @@
 import 'dart:math' as math;
 import 'dart:typed_data';
 
-/// DCT-based perceptual hash, ported from the fab-tabletop scanner
-/// (`assets/js/card_scanner/p_hash.js`) so on-device hashes match the
+/// DCT-based perceptual hash so on-device hashes match the
 /// values precomputed into the bundled card database.
 ///
 /// Pipeline:
