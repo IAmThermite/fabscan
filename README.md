@@ -3,9 +3,11 @@
 Point your phone at a **Flesh and Blood** trading card and instantly see the
 card, its set / foil / art variants, and prices from third-party sites.
 
-Everything except pricing runs **offline** against a bundled SQLite database of
-precomputed perceptual hashes. The only network calls are to the pricing
-sources (and, later, to fetch a fresh card database).
+Scanning runs **offline** against a bundled SQLite database of precomputed
+perceptual hashes, and prices are served from a locally cached dataset. Network
+is only used at launch to check a small `manifest.json` and, when newer data is
+available, pull a fresh prices dataset (≤1×/24h) or card database in the
+background — the app works fully offline otherwise.
 
 ## How a scan works
 
@@ -31,9 +33,12 @@ thresholds — 15 for art crops, 8 for the whole-card hash).
 | [lib/src/vision/camera_utils.dart](lib/src/vision/camera_utils.dart) | YUV420 camera frame → BGR `Mat` |
 | [lib/src/db/](lib/src/db/) | Bundled card DB loader, pHash matching DAO, 24h recents store |
 | [lib/src/scan/scan_controller.dart](lib/src/scan/scan_controller.dart) | Frame sampling + recognition orchestration |
-| [lib/src/pricing/](lib/src/pricing/) | Pluggable price sources (Shopify live fetch + link-outs) |
+| [lib/src/pricing/](lib/src/pricing/) | Store-backed pricing (precomputed dataset + currency conversion + link-out fallback) |
+| [lib/src/data/remote_update_service.dart](lib/src/data/remote_update_service.dart) | Launch-time `manifest.json` check → refresh prices / hot-swap card DB |
 | [lib/src/ui/](lib/src/ui/) | Scan screen, results + variant carousel, recents |
-| [tool/build_card_db.dart](tool/build_card_db.dart) | Generates `assets/cards.db` |
+| [tool/build_card_db.py](tool/build_card_db.py) | Builds `assets/cards.db` from the card-data submodule |
+| [tool/scrape_prices.py](tool/scrape_prices.py) | Scrapes `prices.json` (prices + FX) for the app to download |
+| [tool/build_manifest.py](tool/build_manifest.py) | Generates `manifest.json` (the launch-time update check) |
 
 ## Build & install
 
@@ -118,37 +123,88 @@ These rewrite native resources, so after running them: stop the app,
 
 ### Building the card database
 
-`assets/cards.db` is generated from the `fab-tabletop` card snapshots. The
-hashes must be produced by the **same Dart pipeline** the app runs on-device, so
-the default mode downloads each card image and recomputes them:
+`assets/cards.db` is built by [tool/build_card_db.py](tool/build_card_db.py)
+(Python stdlib, no extra deps) from the **`flesh-and-blood-cards`** submodule,
+which ships **precomputed** perceptual hashes — so there's no image download and
+no recompute (it's fast). Init the submodule first:
 
 ```bash
-# Full database (downloads ~9k card images; one-time, several minutes)
-dart run tool/build_card_db.dart
+git submodule update --init flesh-and-blood-cards   # one-time
 
-# Quick test against 50 cards
-dart run tool/build_card_db.dart --limit 50
+# Full database (reads the submodule's card.json)
+python tool/build_card_db.py --out assets/cards.db
 
-# Fast path: reuse the hashes already in the JSON (NOTE: these were computed by
-# the reference project's pipeline and will NOT match live camera hashes — use
-# only for populating names/images/variants while developing the UI).
-dart run tool/build_card_db.dart --reuse-phash
+# Quick test against 50 cards (writes elsewhere so you don't clobber the asset)
+python tool/build_card_db.py --out /tmp/cards.db --limit 50
+
+# You can also read card.json straight from the fork without the submodule:
+python tool/build_card_db.py \
+  --from https://raw.githubusercontent.com/IAmThermite/flesh-and-blood-cards/feature/card-art-hashes/json/english/card.json \
+  --out /tmp/cards.db --limit 50
 ```
 
-Output goes to `assets/cards.db` by default (`--out` to change). If the asset is
-missing the app still launches with an empty database (no matches).
+The builder stamps a content version into `meta.version` (used by the remote-DB
+update check). If the asset is missing the app still launches with an empty
+database (no matches). The submodule's hash pipeline must stay byte-compatible
+with the app's `PHash` — see [CLAUDE.md](CLAUDE.md) before changing branches.
+
+### Price & manifest data pipeline (local testing)
+
+Prices are **precomputed** by [tool/scrape_prices.py](tool/scrape_prices.py) and
+published (with a tiny [tool/build_manifest.py](tool/build_manifest.py)) for the
+app to download — see [the data-pipeline section in CLAUDE.md](CLAUDE.md). To run
+them locally:
+
+```bash
+pip install requests          # scrape_prices.py's only extra dep
+                              # (build_card_db.py / build_manifest.py are stdlib-only)
+
+# Scrape a handful of cards into ./dist/prices.json. --from takes a path or URL;
+# use the raw fork URL to skip needing the submodule:
+python tool/scrape_prices.py \
+  --from https://raw.githubusercontent.com/IAmThermite/flesh-and-blood-cards/feature/card-art-hashes/json/english/card.json \
+  --out dist --limit 50
+
+# Iterate on one source at a time (skip the slow/best-effort ones):
+python tool/scrape_prices.py --from <card.json|url> --out dist --limit 50 --no-tcg --no-cm
+
+# Regenerate the manifest from whatever's in ./dist (prices.json and/or cards.db):
+python tool/build_manifest.py --dir dist --base-url https://iamthermite.github.io/fabscan
+
+# Inspect results:
+cat dist/manifest.json
+python -m json.tool dist/prices.json | head -40
+```
+
+Notes:
+- Per-source coverage is logged to stderr (Shopify + TCGplayer cover many prints;
+  Cardmarket is best-effort and usually empty → the app link-outs).
+- The per-source keys in `prices.json` (`MinMaxGames`, `Fluke & Box`, `TCGplayer`,
+  `Cardmarket`) must byte-match the app's `PriceSource.name` values, or that
+  source silently downgrades to a link-out in the app.
+- To exercise the app against a local file, host `dist/` (e.g.
+  `python -m http.server` in `dist/`) and point `RemoteUpdateService`'s manifest
+  URL at it.
 
 ## Pricing sources
 
-Pricing is pluggable via [`PriceSource`](lib/src/pricing/price_source.dart):
+Prices are **precomputed daily** by [tool/scrape_prices.py](tool/scrape_prices.py)
+into a `prices.json` the app downloads (≤1×/24h) and serves offline from a local
+`prices.db`, converted to the user's display currency (default NZD) at view time:
 
-- **MinMaxGames**, **Fluke & Box** — Shopify storefronts; live prices are
-  fetched from their public `/search/suggest.json` endpoint (no API key).
-- **TCGplayer**, **Cardmarket** — no open price API, so these deep-link to the
-  site's search results.
+- **MinMaxGames** (AUD), **Fluke & Box** (NZD) — Shopify storefronts; the scraper
+  bulk-crawls each store's public `/products.json`.
+- **TCGplayer** (USD) — per-print, via the product id in each print's
+  `tcgplayer_url` + TCGplayer's `mpapi` price-points endpoint.
+- **Cardmarket** (EUR) — best-effort; usually degrades to a link-out.
 
-Add a new store by implementing `PriceSource` (or extending `ShopifySource`)
-and registering it in [`PricingService`](lib/src/pricing/pricing_service.dart).
+Every source **always** offers at least a tappable link-out via
+[`PriceSource`](lib/src/pricing/price_source.dart) (even offline / for unpriced
+prints). Add a new store by implementing `PriceSource` (or extending
+`ShopifySource`), registering it in
+[`PricingService`](lib/src/pricing/pricing_service.dart), and adding a matching
+adapter in `tool/scrape_prices.py` (keys must match `PriceSource.name`). See
+[CLAUDE.md](CLAUDE.md) for the full pricing + remote-update design.
 
 ## Known limitations / next steps
 

@@ -45,7 +45,13 @@ class _TitlePick {
 class CardRepository {
   CardRepository(this._dao, {this.minTitleConfidence = 60});
 
-  final CardDao _dao;
+  /// The current DAO. Mutable so the remote-update flow can hot-swap in a newly
+  /// downloaded `cards.db` without recreating the repository (and the
+  /// `ScanController` that holds it). The scan loop serialises frames behind a
+  /// `_busy` flag and each `recognize`/`diagnoseClosest` call awaits the current
+  /// DAO, so swapping the reference between frames is safe; the next lookup
+  /// rebuilds the new DAO's in-memory caches lazily.
+  CardDao _dao;
 
   /// Minimum word-level OCR confidence (0..100) at which we trust the read
   /// title to identify the card. Above this the OCR title takes priority over
@@ -55,6 +61,9 @@ class CardRepository {
   final double minTitleConfidence;
 
   int get cardCount => _dao.cachedPrintCount;
+
+  /// Swaps in a DAO backed by a freshly downloaded `cards.db`. See [_dao].
+  void replaceDao(CardDao dao) => _dao = dao;
 
   /// Finds the best card for a set of captured hashes, loading its full set of
   /// variants. Returns null when nothing matches.

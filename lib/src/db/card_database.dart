@@ -14,6 +14,9 @@ import 'package:sqflite/sqflite.dart';
 class CardDatabase {
   CardDatabase._(this.db);
 
+  /// Wraps an already-open database (e.g. an in-memory one) for tests.
+  CardDatabase.forTesting(this.db);
+
   final Database db;
 
   /// Asset path of the prebuilt database.
@@ -98,8 +101,25 @@ class CardDatabase {
     }
   }
 
+  /// The content version stamped into the open DB's `meta` table by the builder
+  /// (`tool/build_card_db.py` writes `meta.version`). This is the single source
+  /// of truth for "which card data is installed" and is compared against the
+  /// remote `manifest.card_db.version` to decide whether to pull a newer DB.
+  /// Null when the meta row is absent (e.g. an empty-schema fallback DB).
+  Future<String?> installedVersion() async {
+    try {
+      final rows = await db.query('meta',
+          columns: ['value'], where: 'key = ?', whereArgs: ['version'], limit: 1);
+      return rows.isEmpty ? null : rows.first['value'] as String?;
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// Replaces the installed database with [bytes] (e.g. a freshly downloaded
-  /// update) and reopens it. Used by the future "fetch new DB" flow.
+  /// update) and reopens it. The remote-update flow uses this to swap in a newer
+  /// `cards.db`; callers must then rebuild the [CardDao] against the returned
+  /// handle (see `RemoteUpdateService`).
   Future<CardDatabase> replaceWith(List<int> bytes, String version) async {
     final path = db.path;
     await db.close();

@@ -2,8 +2,6 @@ import 'shopify_source.dart';
 
 /// Fluke & Box — Flesh and Blood specialist (Shopify storefront).
 class FlukeAndBoxSource extends ShopifySource {
-  FlukeAndBoxSource({super.client});
-
   @override
   String get name => 'Fluke & Box';
 

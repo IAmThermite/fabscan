@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import 'src/data/card_repository.dart';
+import 'src/data/remote_update_service.dart';
 import 'src/db/recents_store.dart';
 import 'src/pricing/pricing_service.dart';
 import 'src/ui/scan_screen.dart';
@@ -14,11 +15,13 @@ class FabScanApp extends StatelessWidget {
     required this.repository,
     required this.recents,
     required this.pricing,
+    required this.updates,
   });
 
   final CardRepository repository;
   final RecentsStore recents;
   final PricingService pricing;
+  final RemoteUpdateService updates;
 
   @override
   Widget build(BuildContext context) {
@@ -27,6 +30,7 @@ class FabScanApp extends StatelessWidget {
         Provider<CardRepository>.value(value: repository),
         Provider<RecentsStore>.value(value: recents),
         Provider<PricingService>.value(value: pricing),
+        Provider<RemoteUpdateService>.value(value: updates),
       ],
       child: MaterialApp(
         title: 'FabScan',

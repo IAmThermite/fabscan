@@ -1,11 +1,12 @@
 import '../models/fab_card.dart';
-import '../models/price_quote.dart';
 
-/// A source of pricing for a card from a 3rd-party site.
+/// A 3rd-party site we show pricing for.
 ///
-/// Implementations either fetch live quotes (e.g. Shopify storefronts expose a
-/// JSON search endpoint) or simply provide a deep link to the site's search
-/// results when no machine-readable price is available.
+/// Live prices are no longer fetched on-device — they're precomputed daily by
+/// `tool/scrape_prices.py` and downloaded into the local `prices.db`. A
+/// `PriceSource` now just supplies the site's identity (name/currency) and the
+/// link-out URL used both as the always-available fallback and as the
+/// destination when a stored price is tapped without an exact listing URL.
 abstract class PriceSource {
   String get name;
 
@@ -14,10 +15,6 @@ abstract class PriceSource {
 
   /// A URL the user can open to view this card on the source site.
   String searchUrl(FabCard card, CardPrint print);
-
-  /// Fetches live quotes. Returns an empty list when the source can't provide
-  /// a price programmatically (callers then fall back to [searchUrl]).
-  Future<List<PriceQuote>> fetchQuotes(FabCard card, CardPrint print);
 
   /// Builds the query string used to look up [card] on the source.
   /// Most singles sites search well on the bare card name.
