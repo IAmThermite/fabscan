@@ -24,8 +24,13 @@ flutter test --name "substring"       # a single test by name
 # Rebuild the bundled card DB (assets/cards.db) from the flesh-and-blood-cards
 # submodule's precomputed hashes (no image download — fast). See the DB constraint below.
 git submodule update --init flesh-and-blood-cards   # one-time, if not cloned
-dart run tool/build_card_db.dart
-dart run tool/build_card_db.dart --limit 50     # quick test against 50 cards
+python tool/build_card_db.py --out assets/cards.db
+python tool/build_card_db.py --out /tmp/cards.db --limit 50   # quick test against 50 cards
+
+# Price + manifest pipeline (see "Remote data updates" below). Stdlib + requests.
+pip install requests
+python tool/scrape_prices.py --from <card.json|raw-url> --out dist   # -> dist/prices.json
+python tool/build_manifest.py --dir dist --base-url https://iamthermite.github.io/fabscan
 ```
 
 First Android build is slow: `opencv_dart` downloads the OpenCV SDK (~100 MB) via CMake.
@@ -39,7 +44,7 @@ First Android build is slow: `opencv_dart` downloads the OpenCV SDK (~100 MB) vi
 `flesh-and-blood-cards/json/english/card.json`: each card carries `name`/`pitch`/`unique_id`
 at the top level and a `printings[]` array, each printing carrying `phash_art` / `phash_full`
 (stringified 63-bit ints), `image_url`, `set_id`, `foiling`, `edition` and `art_variations`.
-[tool/build_card_db.dart](tool/build_card_db.dart) reads these straight into the DB — no image
+[tool/build_card_db.py](tool/build_card_db.py) reads these straight into the DB — no image
 download, no recompute. **The phashes are only usable because the fork's
 `helper-scripts/calculate-phashes` pipeline is byte-for-byte equivalent to this app's Dart
 `PHash`** (same 32×32 area-average downsample, 0.299/0.587/0.114 luma, top-left 8×8 DCT block
@@ -82,11 +87,13 @@ price panel re-key off the new print. Keep the resolver Flutter-free (it's unit-
 ## Invariants you must not break
 
 - **RGB everywhere into `PHash`.** `PHash.compute` ([phash.dart](lib/src/vision/phash.dart)) and the build tool both feed **RGB** pixels. Camera buffers are BGR — convert before hashing or matches silently fail.
-- **The bundled DB's pHashes must stay pipeline-compatible.** `assets/cards.db` pHashes come from the `flesh-and-blood-cards` submodule (see the section above) via `dart run tool/build_card_db.dart`. They only match live camera captures because the fork's hash pipeline mirrors this app's `PHash` — if you point the submodule at a different fork/branch, re-verify that equivalence first.
+- **The bundled DB's pHashes must stay pipeline-compatible.** `assets/cards.db` pHashes come from the `flesh-and-blood-cards` submodule (see the section above) via `python tool/build_card_db.py`. They only match live camera captures because the fork's hash pipeline mirrors this app's `PHash` — if you point the submodule at a different fork/branch, re-verify that equivalence first.
 - **One art-crop tuning knob.** At scan time the app can't know a print's art type, so the app crops the art region with the fixed `ArtBbox.defaultRegular` ([fab_card.dart](lib/src/models/fab_card.dart) line 175) via the pure-Dart `ArtCrop.extract` ([art_crop.dart](lib/src/vision/art_crop.dart)), and the submodule's hash pipeline crops the identical `REGULAR_ART_BBOX = (0.10, 0.16, 0.80, 0.42)`. Change the app side and the stored hashes no longer match — you'd need the fork to recompute against the new rect.
 - **Hamming thresholds** (in `CardDao`): `artThreshold = 15`, `fullThreshold = 8`. These mirror the reference scanner; lower = stricter.
-- **Schema is duplicated** between [card_database.dart](lib/src/db/card_database.dart) (`schema`, the empty-DB fallback) and [tool/build_card_db.dart](tool/build_card_db.dart) (`_createSchema`). Keep them in sync.
+- **Schema is duplicated** between [card_database.dart](lib/src/db/card_database.dart) (`schema`, the empty-DB fallback) and [tool/build_card_db.py](tool/build_card_db.py) (`_create_schema`). Keep them in sync.
 - **`CardDatabase.bundledVersion`** (currently `'dev4'`) gates re-copying the asset over a previously installed DB. Bump it after shipping a new `cards.db` or the old one persists on-device.
+- **Card-DB version alignment.** The remote-update flow compares the published `manifest.card_db.version` to the *installed* DB's `meta.version` (stamped by `build_card_db.py`). When you refresh `assets/cards.db`, keep `bundledVersion`, the bundled DB's `meta.version`, and the published version coherent — otherwise a fresh install will needlessly re-download an identical DB on first launch.
+- **`prices.db` is separate and app-owned.** Pricing lives in its own writable DB ([price_store.dart](lib/src/db/price_store.dart)); never mix it into the read-only `cards.db`, which is replaced wholesale on a `bundledVersion` bump / remote swap.
 
 ## Android toolchain (pinned — do not bump blindly)
 
@@ -123,16 +130,48 @@ Things that differ from Android and must not regress:
   `com.example.fabscan`) before release.
 
 ## Pricing
+Prices are **precomputed offline**, not fetched live on-device. The daily
+[tool/scrape_prices.py](tool/scrape_prices.py) scrapes every print in `card.json` —
+MinMaxGames (AUD) + Fluke & Box (NZD) by bulk-crawling each Shopify storefront's public
+`/products.json`, TCGplayer (USD) per-print via the product id in `tcgplayer_url` +
+TCGplayer's `mpapi` price-points endpoint, and Cardmarket (EUR) best-effort (usually
+degrades to link-out) — into a single `prices.json` (+ daily FX rates).
 
-Pluggable via `PriceSource` ([lib/src/pricing/](lib/src/pricing/)), registered in
-`PricingService`. MinMaxGames (AUD) and Fluke & Box (NZD) fetch live from Shopify's public
-`/search/suggest.json` (no API key, via `ShopifySource`); TCGplayer and Cardmarket have no
-open price API so they deep-link out (`LinkOutSource`). TCGplayer prefers the recognised
-printing's `tcgplayer_url` (stored per print in the DB) and falls back to a name search when
-it's absent; Cardmarket always searches by name. User locale is NZ.
+In the app, [PriceStore](lib/src/db/price_store.dart) is a writable `prices.db` cache;
+[PricingService](lib/src/pricing/pricing_service.dart) `.quotesFor(card, print)` joins
+stored rows on `CardPrint.id` (== printing `unique_id`) and returns, per configured
+`PriceSource`, either the stored price **converted to the user's display currency**
+([currency.dart](lib/src/pricing/currency.dart), default NZD) or — always, as a fallback —
+a link-out via `PriceSource.searchUrl` (TCGplayer deep-links via `print.tcgplayerUrl`). So
+every source is at minimum tappable, even offline. The dataset's `generated_at` is shown in
+the price panel. **Contract:** the per-source keys in `prices.json` must byte-match each
+`PriceSource.name` (`MinMaxGames`, `Fluke & Box`, `TCGplayer`, `Cardmarket`) — a mismatch
+silently downgrades that source to a link-out.
+
+## Remote data updates
+
+A small `manifest.json` (published to GitHub Pages, `https://iamthermite.github.io/fabscan/`)
+drives launch-time updates of *both* data files; [RemoteUpdateService](lib/src/data/remote_update_service.dart)
+fetches it once per launch, fire-and-forget (never blocks the camera; offline/error leaves
+existing data intact):
+- **prices** → downloaded into `prices.db` when stale (>24h since `fetched_at`) **and** the
+  dataset's `generated_at` changed. Refresh-staleness keys on `fetched_at`; the user-facing
+  freshness keys on `generated_at` — keep these distinct.
+- **card_db** → whenever `manifest.card_db.version` differs from the installed DB's
+  `meta.version`, the new `cards.db` is pulled and **hot-swapped** ([CardDatabase.replaceWith](lib/src/db/card_database.dart)
+  + [CardRepository.replaceDao](lib/src/data/card_repository.dart)), so card data is never
+  stale when a newer build exists — no app release needed.
+
+Publishing: two GitHub Actions ([.github/workflows/](.github/workflows/)) — `scrape-prices.yml`
+(daily) and `build-card-db.yml` (weekly / `workflow_dispatch`) — each check out the existing
+`gh-pages` files, rebuild only their artifact, regenerate `manifest.json` via
+[tool/build_manifest.py](tool/build_manifest.py) (so the untouched section is preserved), and
+publish to `gh-pages` (served by Pages). They share a `concurrency` group to avoid push races.
 
 ## Wiring
 
-[main.dart](lib/main.dart) opens the DB + recents store and injects `CardRepository`,
-`RecentsStore`, and `PricingService` via `provider` ([app.dart](lib/app.dart)). The app
+[main.dart](lib/main.dart) opens the card DB + recents store + `PriceStore`, optionally seeds
+`prices.db` from a bundled `assets/prices.json`, then injects `CardRepository`, `RecentsStore`,
+`PricingService`, and `RemoteUpdateService` via `provider` ([app.dart](lib/app.dart)) and
+kicks off `RemoteUpdateService.checkForUpdates()` in the background after `runApp`. The app
 opens on `ScanScreen`. Set a real `applicationId` (currently `com.example.fabscan`) before release.
