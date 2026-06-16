@@ -69,6 +69,15 @@ class _ResultsScreenState extends State<ResultsScreen> {
     });
   }
 
+  /// Step to the previous/next print of the current card, wrapping around.
+  void _stepPrint(int delta) {
+    final prints = _card.prints;
+    if (prints.length < 2) return;
+    final i = prints.indexWhere((p) => p.id == _selected.id);
+    final next = ((i < 0 ? 0 : i) + delta) % prints.length;
+    setState(() => _selected = prints[(next + prints.length) % prints.length]);
+  }
+
   @override
   Widget build(BuildContext context) {
     final card = _card;
@@ -78,7 +87,11 @@ class _ResultsScreenState extends State<ResultsScreen> {
       body: ListView(
         padding: const EdgeInsets.only(bottom: 32),
         children: [
-          _CardHero(print: _selected),
+          _CardHero(
+            print: _selected,
+            canStep: card.prints.length > 1,
+            onStep: _stepPrint,
+          ),
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
             child: Column(
@@ -126,33 +139,92 @@ class _ResultsScreenState extends State<ResultsScreen> {
 }
 
 class _CardHero extends StatelessWidget {
-  const _CardHero({required this.print});
+  const _CardHero({
+    required this.print,
+    this.canStep = false,
+    this.onStep,
+  });
+
   final CardPrint print;
+
+  /// Whether the prev/next print arrows should be shown.
+  final bool canStep;
+
+  /// Called with -1 (previous) or +1 (next) when an arrow is tapped.
+  final ValueChanged<int>? onStep;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
+    final image = print.imageUrl == null
+        ? const _NoImage()
+        : ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: Image.network(
+              print.imageUrl!,
+              fit: BoxFit.contain,
+              loadingBuilder: (c, child, progress) => progress == null
+                  ? child
+                  : const Center(child: CircularProgressIndicator()),
+              errorBuilder: (c, e, s) => const _NoImage(),
+            ),
+          );
+    return SizedBox(
       height: 360,
-      alignment: Alignment.center,
-      padding: const EdgeInsets.symmetric(vertical: 16),
-      child: print.imageUrl == null
-          ? const _NoImage()
-          : ClipRRect(
-              borderRadius: BorderRadius.circular(12),
-              child: Image.network(
-                print.imageUrl!,
-                fit: BoxFit.contain,
-                loadingBuilder: (c, child, progress) => progress == null
-                    ? child
-                    : const Center(child: CircularProgressIndicator()),
-                errorBuilder: (c, e, s) => const _NoImage(),
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 56),
+            child: image,
+          ),
+          if (canStep) ...[
+            Align(
+              alignment: Alignment.centerLeft,
+              child: _StepButton(
+                icon: Icons.chevron_left,
+                onPressed: () => onStep?.call(-1),
               ),
             ),
+            Align(
+              alignment: Alignment.centerRight,
+              child: _StepButton(
+                icon: Icons.chevron_right,
+                onPressed: () => onStep?.call(1),
+              ),
+            ),
+          ],
+        ],
+      ),
     );
   }
 }
 
-class _VariantCarousel extends StatelessWidget {
+class _StepButton extends StatelessWidget {
+  const _StepButton({required this.icon, required this.onPressed});
+
+  final IconData icon;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      child: Material(
+        color: Colors.black.withValues(alpha: 0.4),
+        shape: const CircleBorder(),
+        clipBehavior: Clip.antiAlias,
+        child: IconButton(
+          icon: Icon(icon),
+          color: Colors.white,
+          onPressed: onPressed,
+          tooltip: icon == Icons.chevron_left ? 'Previous print' : 'Next print',
+        ),
+      ),
+    );
+  }
+}
+
+class _VariantCarousel extends StatefulWidget {
   const _VariantCarousel({
     required this.prints,
     required this.selected,
@@ -164,19 +236,55 @@ class _VariantCarousel extends StatelessWidget {
   final ValueChanged<CardPrint> onSelect;
 
   @override
+  State<_VariantCarousel> createState() => _VariantCarouselState();
+}
+
+class _VariantCarouselState extends State<_VariantCarousel> {
+  // Approx width of a thumbnail (80) + its separator (12); used to bring the
+  // selected item roughly into view when stepped via the hero arrows.
+  static const double _itemExtent = 92;
+  final _controller = ScrollController();
+
+  @override
+  void didUpdateWidget(_VariantCarousel old) {
+    super.didUpdateWidget(old);
+    if (old.selected.id != widget.selected.id) _scrollToSelected();
+  }
+
+  void _scrollToSelected() {
+    final i = widget.prints.indexWhere((p) => p.id == widget.selected.id);
+    if (i < 0 || !_controller.hasClients) return;
+    final target = (i * _itemExtent)
+        .clamp(0.0, _controller.position.maxScrollExtent);
+    _controller.animateTo(
+      target,
+      duration: const Duration(milliseconds: 250),
+      curve: Curves.easeOut,
+    );
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final prints = widget.prints;
     return SizedBox(
       height: 150,
       child: ListView.separated(
+        controller: _controller,
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: 16),
         itemCount: prints.length,
         separatorBuilder: (_, _) => const SizedBox(width: 12),
         itemBuilder: (context, i) {
           final p = prints[i];
-          final isSelected = p.id == selected.id;
+          final isSelected = p.id == widget.selected.id;
           return GestureDetector(
-            onTap: () => onSelect(p),
+            onTap: () => widget.onSelect(p),
             child: Column(
               children: [
                 Container(
