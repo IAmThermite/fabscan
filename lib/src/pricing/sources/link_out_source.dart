@@ -41,12 +41,38 @@ class LinkOutSource extends PriceSource {
             '?productLineName=flesh-and-blood-tcg&q=${Uri.encodeQueryComponent(q)}',
       );
 
-  /// Cardmarket Flesh and Blood search.
+  /// Cardmarket Flesh and Blood search. There's no per-print Cardmarket URL in
+  /// the card data and the site is behind a Cloudflare challenge we don't
+  /// scrape, so this stays a name search across all sets — but the query is
+  /// normalised ([cardmarketSearchQuery]) so awkward FAB names still resolve.
   factory LinkOutSource.cardmarket() => LinkOutSource(
         name: 'Cardmarket',
         currency: 'EUR',
         buildUrl: (q) =>
             'https://www.cardmarket.com/en/FleshAndBlood/Products/Search'
-            '?searchString=${Uri.encodeQueryComponent(q)}',
+            '?searchString=${Uri.encodeQueryComponent(cardmarketSearchQuery(q))}',
       );
+}
+
+/// Normalises a card name into a Cardmarket search query. Cardmarket's product
+/// search is tokenised and matches across every printing, but a few features of
+/// the FAB names (verified against the bundled card list) otherwise return few
+/// or no results:
+///   * Double-faced names ("Arcane Seeds // Life") are reduced to the front
+///     face — the "//" form matches nothing.
+///   * Sentence punctuation (',', ':', ';', '.', '!', '?') becomes a space and
+///     runs of whitespace collapse, so "Art of Desire: Body" and "And Again..."
+///     search cleanly.
+/// Apostrophes, hyphens and accented letters are kept verbatim: they appear in
+/// Cardmarket's own listings, so dropping them ("Autumn's" → "Autumns") would
+/// hurt matching. Falls back to the raw name if normalising empties the query.
+String cardmarketSearchQuery(String name) {
+  var q = name;
+  final slash = q.indexOf('//');
+  if (slash >= 0) q = q.substring(0, slash); // front face of a double-faced card
+  q = q
+      .replaceAll(RegExp(r'[,:;.!?]+'), ' ')
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
+  return q.isEmpty ? name.trim() : q;
 }
