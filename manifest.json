@@ -2,7 +2,7 @@
   "schema_version": 1,
   "prices": {
     "url": "https://iamthermite.github.io/fabscan/prices.json",
-    "generated_at": "2026-08-20T00:54:37Z"
+    "generated_at": "2026-08-21T00:59:36Z"
   },
   "card_db": {
     "url": "https://iamthermite.github.io/fabscan/cards.db",
